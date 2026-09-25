@@ -1,0 +1,66 @@
+clock periods used (ps): {'pipe6': 270, 'pipe4': 470, 'horizontal': 270, 'vertical': 300}
+
+1. PIPELINES: 4-stage (IF OF EX+MA RW) vs 6-stage (IF ID OF EX MA RW)
+program  model  instr  cycles    CPI  stalls  flushed  time(ns)
+-------  -----  -----  ------  -----  ------  -------  --------
+    sum  pipe4     64      85  1.328       0       18      40.0
+    sum  pipe6     64     106  1.656      10       27      28.6
+   fact  pipe4     79     118  1.494       0       36      55.5
+   fact  pipe6     79     143   1.81       5       54      38.6
+ hazard  pipe4      9      14  1.556       0        2       6.6
+ hazard  pipe6      9      19  2.111       2        3       5.1
+ muldiv  pipe4     17      20  1.176       0        0       9.4
+ muldiv  pipe6     17      22  1.294       0        0       5.9
+ bubble  pipe4    375     504  1.344       0      126     236.9
+ bubble  pipe6    375     605  1.613      36      189     163.3
+
+2. MICROPROGRAMMED CONTROL: horizontal vs vertical
+program       model  instr  cycles    CPI   ROM bits  time(ns)
+-------  ----------  -----  ------  -----  ---------  --------
+    sum  horizontal     64     318  4.969  26x26=676      85.9
+    sum    vertical     64     421  6.578  36x14=504     126.3
+   fact  horizontal     79     401  5.076  26x26=676     108.3
+   fact    vertical     79     535  6.772  36x14=504     160.5
+ hazard  horizontal      9      45    5.0  26x26=676      12.2
+ hazard    vertical      9      58  6.444  36x14=504      17.4
+ muldiv  horizontal     17      83  4.882  26x26=676      22.4
+ muldiv    vertical     17     107  6.294  36x14=504      32.1
+ bubble  horizontal    375    1869  4.984  26x26=676     504.6
+ bubble    vertical    375    2462  6.565  36x14=504     738.6
+
+3. ALU ALGORITHMS on 2000 random operand pairs
+                  op     algorithm          average cost
+--------------------  ------------  --------------------
+                 add        ripple        64 gate delays
+                 add           cla        18 gate delays
+ mul (random 32-bit)      shiftadd  16.0 add/sub per mul
+ mul (random 32-bit)         booth  15.9 add/sub per mul
+mul (small positive)      shiftadd   4.0 add/sub per mul
+mul (small positive)         booth   4.6 add/sub per mul
+mul (small negative)      shiftadd  28.0 add/sub per mul
+mul (small negative)         booth   4.7 add/sub per mul
+                 div     restoring  61.4 add/sub per div
+                 div  nonrestoring  32.5 add/sub per div
+
+   same programs, pipe6, ALU work counted:
+program              adder/mul/div  adds  adder delay  mul add/sub  div add/sub
+-------  -------------------------  ----  -----------  -----------  -----------
+    sum  ripple/shiftadd/restoring    50         3200            0            0
+    sum     cla/booth/nonrestoring    50          900            0            0
+   fact  ripple/shiftadd/restoring    60         3840            8            0
+   fact     cla/booth/nonrestoring    64         1152           12            0
+ hazard  ripple/shiftadd/restoring     6          384            0            0
+ hazard     cla/booth/nonrestoring     6          108            0            0
+ muldiv  ripple/shiftadd/restoring     2          128            2          125
+ muldiv     cla/booth/nonrestoring     2           36            2           64
+ bubble  ripple/shiftadd/restoring   266        17024            0            0
+ bubble     cla/booth/nonrestoring   266         4788            0            0
+
+4. CORRECTNESS: every model and every ALU choice ends in the same state
+   sum      same
+   fact     same
+   hazard   same
+   muldiv   same
+   bubble   same
+
+all models agree
