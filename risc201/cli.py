@@ -1,5 +1,5 @@
 """
-cli.py - interactive simulator and debugger for RISC201 (Member B)
+cli.py - interactive simulator and debugger for RISC201 (Member D)
 
     python cli.py examples/fact.s                     6-stage pipeline (default)
     python cli.py examples/fact.s --mode pipe4        4-stage pipeline
