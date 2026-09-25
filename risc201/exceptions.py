@@ -1,5 +1,5 @@
 """
-exceptions.py - runtime exceptions of the RISC201 machine (Member D)
+exceptions.py - runtime exceptions of the RISC201 machine (Phase 2 - owner not assigned yet)
 
 When the simulated program does something illegal, the simulator raises
 one of these. The CLI catches it, stops, and shows where it happened.

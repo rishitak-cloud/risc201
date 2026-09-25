@@ -1,5 +1,5 @@
 """
-preprocessor.py - stack macros (Member D)
+preprocessor.py - stack macros (Phase 2 - owner not assigned yet)
 
 Runs BEFORE the assembler. It rewrites two macros into real instructions.
 

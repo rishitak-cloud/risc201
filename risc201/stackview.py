@@ -1,5 +1,5 @@
 """
-stackview.py - ASCII picture of the stack (Member D)
+stackview.py - ASCII picture of the stack (Phase 2 - owner not assigned yet)
 
 Draws memory from the stack base (top of the picture, high addresses)
 down to sp (bottom), because our stack is full descending: pushes move

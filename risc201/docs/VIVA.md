@@ -50,15 +50,15 @@ Each member should be able to (1) explain their part in ~1 minute, (2) run its d
 
 ---
 
-## Member C — microprogrammed control unit (1b)
+## Member C — control unit design + single-cycle CPU (1b, 2d simulator)
 
-**Files:** `microcode.py`, `microcpu.py`
+**Files:** `microcode.py`, `cpu.py` (`microcpu.py` = item 3, later)
 **Diagram:** `control_unit`
-**Code to know cold:** `ControlMemory.encode` / `decode`, `MicroCPU.micro_step`, `next_upc`, `perform`
+**Code to know cold:** `SingleCycleCPU.step` (fetch, decode, execute, memory, write back), `ControlMemory.encode` / `decode`, `check_rom`, the `HORIZONTAL` / `VERTICAL` tables
 
 **1-minute pitch:** This CPU has no hardwired control. Each cycle it reads one microinstruction from control memory at microPC, turns on its control signals and computes the next microPC. Opcodes are only used by DISPATCH to jump to a routine. Horizontal words have one bit per signal (wide, fast); vertical words hold one encoded micro-op (narrow, slower, needs a decoder).
 
-**Demo:** `python cli.py examples/sum.s --mode horizontal`, then `ucode`, `step 10`, `next`. Repeat with `--mode vertical`.
+**Demo:** `python cli.py examples/fact.s --mode single`, then `step 5` (each line shows what changed). Then `python microcode.py` for both control memories.
 
 **Likely questions**
 
@@ -71,10 +71,12 @@ Each member should be able to (1) explain their part in ~1 minute, (2) run its d
 | Why can RA_LINK and PC_BRANCH share a word? | RA_LINK reads the old PC, PC_BRANCH writes the new one — same edge, no conflict. |
 | How do mov/not reuse the ALU routine? | MOVNOT loads B then JUMPs to ALU_GO. |
 | What raises an exception? | Unknown opcode at DISPATCH, microPC outside the ROM. |
+| What is the single-cycle CPU for? | One whole instruction per step, no overlap: the simplest correct model. The pipelines and microcode must end in the same state as it. |
+| Why is its CPI exactly 1? | Every instruction takes one (long) cycle; the clock period must fit the slowest instruction (ld: fetch + decode + ALU + memory + write back). |
 
 ---
 
-## Member D — ALU + CLI debugger (1c, 2c, 2d)
+## Member D — ALU + CLI debugger (1c, 2c, 2d debugger)
 
 **Files:** `alu.py`, `cli.py`
 **Diagram:** `alu`

@@ -1,6 +1,6 @@
 """
 machine.py - the architectural state that every processor model shares
-(Member D owns memory + stack guard, Member B owns the register file)
+(Member B owns this file; the stack-guard checks inside it are Phase 2)
 
     Machine
       .regs    RegisterFile   16 x 32-bit, writes to sp are checked

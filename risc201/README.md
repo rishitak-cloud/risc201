@@ -10,6 +10,7 @@ The ISA follows **SimpleRisc** (Sarangi, Ch. 3). Plain Python 3, no libraries ne
 python tests/test_all.py                              # 13 tests, all should pass
 python bench.py                                       # full evaluation tables
 python cli.py examples/fact.s                         # debugger, 6-stage pipeline
+python cli.py examples/fact.s --mode single           # single-cycle CPU
 python cli.py examples/sum.s --mode horizontal        # microprogrammed CPU
 python assembler.py examples/fact.s -l fact.lst       # -> fact.hex + listing
 python disassembler.py examples/fact.hex
@@ -21,8 +22,8 @@ python disassembler.py examples/fact.hex
 |---|---|---|---|
 | A | 2a, 2b (+ ISA design) | `isa.py`, `assembler.py`, `disassembler.py` | `instruction_formats` |
 | B | 1a | `pipeline.py`, `machine.py` | `pipeline_4stage`, `pipeline_6stage` |
-| C | 1b | `microcode.py`, `microcpu.py` | `control_unit` |
-| D | 1c, 2c, 2d | `alu.py`, `cli.py` | `alu` |
+| C | 1b, 2d (CPU simulator) | `microcode.py` (design: formats + microprograms), `cpu.py`; `microcpu.py` runs microcode = item 3, later | `control_unit` |
+| D | 1c, 2c, 2d (debugger) | `alu.py`, `cli.py` | `alu` |
 
 `bench.py` is shared: B presents the 4 vs 6-stage table, C the horizontal vs vertical table, D the ALU table.
 Interfaces between the parts are in `docs/diagrams/ownership.png`.
@@ -38,7 +39,7 @@ Phase 2 (already built, not presented yet): `preprocessor.py`, `stackview.py`, s
 | 1c ALU | `alu.py`, DESIGN.md §3, `alu` diagram |
 | 2a two-pass assembler → hex/binary | `assembler.py` |
 | 2b disassembler | `disassembler.py` |
-| 2c/2d CLI simulator + step debugger | `cli.py` |
+| 2c/2d CLI simulator + step debugger | `cpu.py` (single-cycle simulator, C), `cli.py` (D) |
 | 2e push/pop macro preprocessor (full descending) | `preprocessor.py` |
 | 2f stack bounds checks + runtime exceptions | `machine.py`, `exceptions.py` |
 | 2g ASCII stack visualizer | `stackview.py` (`stack` command) |
@@ -66,13 +67,13 @@ Phase 2 (already built, not presented yet): `preprocessor.py`, `stackview.py`, s
 | `stats` | cycles, CPI, stalls, flushes, ALU work |
 | `reset`, `quit` | |
 
-Options: `--mode pipe4|pipe6|horizontal|vertical`, `--adder ripple|cla`, `--mul shiftadd|booth`, `--div restoring|nonrestoring`, `--no-guard`, `--run`.
+Options: `--mode single|pipe4|pipe6|horizontal|vertical`, `--adder ripple|cla`, `--mul shiftadd|booth`, `--div restoring|nonrestoring`, `--no-guard`, `--run`.
 
 ## 5-minute demo script
 
 1. **A:** `python assembler.py examples/fact.s -l fact.lst` → show listing, then `python disassembler.py examples/fact.hex`.
 2. **B:** `python cli.py examples/hazard.s --mode pipe6` → `step 10`, `diag`. Same with `--mode pipe4`: no stall, one fewer flush.
-3. **C:** `python cli.py examples/sum.s --mode vertical` → `ucode`, `next`, `next` (microPC trace). Mention horizontal's numbers.
+3. **C:** `python cli.py examples/fact.s --mode single` → `step 5`. Then `python microcode.py` → both control memories; explain one instruction in H vs V.
 4. **D:** `python cli.py examples/sum.s --mode pipe4` → `watch r1`, `c`, `regs`, `mem array 4`. Then `muldiv.s --run` with `--mul shiftadd` vs `--mul booth`.
 5. Each member shows their table from `python bench.py`.
 

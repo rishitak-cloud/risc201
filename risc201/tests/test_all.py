@@ -20,13 +20,16 @@ from machine import Machine, load_file
 from microcode import check_rom
 from microcpu import MicroCPU
 from pipeline import Pipeline
+from cpu import SingleCycleCPU
 from preprocessor import expand_macros
 
-MODES = ('pipe4', 'pipe6', 'horizontal', 'vertical')
+MODES = ('single', 'pipe4', 'pipe6', 'horizontal', 'vertical')
 EXAMPLES = ['sum', 'fact', 'hazard', 'muldiv', 'bubble']
 
 
 def make_cpu(machine, mode):
+    if mode == 'single':
+        return SingleCycleCPU(machine)
     if mode.startswith('pipe'):
         return Pipeline(machine, int(mode[-1]))
     return MicroCPU(machine, mode)
@@ -166,6 +169,12 @@ def test_wrong_path_fetch_is_harmless():
     """The fetch after the final branch goes past the code; it must be
     flushed, not reported as an error."""
     run_source("b end\nend: hlt", 'pipe6')
+
+
+def test_single_cycle_cpi():
+    """single-cycle: exactly one cycle per instruction."""
+    m, cpu = run_source(open('examples/sum.s').read(), 'single')
+    assert cpu.cycle == cpu.retired == 64
 
 
 def test_microcode_checker():

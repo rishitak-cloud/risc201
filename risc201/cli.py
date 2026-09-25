@@ -2,6 +2,7 @@
 cli.py - interactive simulator and debugger for RISC201 (Member D)
 
     python cli.py examples/fact.s                     6-stage pipeline (default)
+    python cli.py examples/fact.s --mode single       single-cycle CPU, one instruction per step
     python cli.py examples/fact.s --mode pipe4        4-stage pipeline
     python cli.py examples/fact.s --mode horizontal   microprogrammed, horizontal
     python cli.py examples/fact.s --mode vertical     microprogrammed, vertical
@@ -23,15 +24,18 @@ from exceptions import RiscError
 from machine import Machine, load_file
 from microcpu import MicroCPU
 from pipeline import Pipeline
+from cpu import SingleCycleCPU
 import stackview
 
-MODES = ('pipe4', 'pipe6', 'horizontal', 'vertical')
+MODES = ('single', 'pipe4', 'pipe6', 'horizontal', 'vertical')
 
 
 def build(path, mode, alu_opts, guard):
     prog = load_file(path)
     machine = Machine(prog, alu=ALU(**alu_opts), guard=guard)
-    if mode.startswith('pipe'):
+    if mode == 'single':
+        cpu = SingleCycleCPU(machine)
+    elif mode.startswith('pipe'):
         cpu = Pipeline(machine, int(mode[-1]))
     else:
         cpu = MicroCPU(machine, mode)
@@ -65,6 +69,10 @@ class Debugger(cmd.Cmd):
     @property
     def is_pipe(self):
         return self.mode.startswith('pipe')
+
+    @property
+    def is_single(self):
+        return self.mode == 'single'
 
     def current_pc(self):
         return self.cpu.pc
@@ -118,7 +126,9 @@ class Debugger(cmd.Cmd):
                 return
             if not self.guarded(self.cpu.step):
                 return
-            if not self.is_pipe:
+            if self.is_single:
+                print(self.cpu.show())
+            elif not self.is_pipe:
                 print(self.cpu.format_step(self.cpu.trace[-1]))
         if self.is_pipe:
             print(self.cpu.show())
@@ -130,7 +140,10 @@ class Debugger(cmd.Cmd):
         """next - finish exactly one more instruction"""
         if not self.ready():
             return
-        if self.is_pipe:
+        if self.is_single:
+            if self.guarded(self.cpu.step):
+                print(self.cpu.show())
+        elif self.is_pipe:
             target = self.cpu.retired + 1
             while self.cpu.retired < target and not self.cpu.halted:
                 if not self.guarded(self.cpu.step):
@@ -280,7 +293,7 @@ class Debugger(cmd.Cmd):
 
     def do_ucode(self, arg):
         """ucode - print the control memory (microprogrammed modes)"""
-        if self.is_pipe:
+        if self.is_pipe or self.is_single:
             print("ucode is for the horizontal / vertical modes")
             return
         print(self.cpu.cm.listing())
@@ -296,6 +309,8 @@ class Debugger(cmd.Cmd):
             for name, ins in self.cpu.slot.items():
                 if ins:
                     marks.setdefault(ins['pc'], []).append(name)
+        elif self.is_single:
+            marks[self.cpu.pc] = ['<- next']
         else:
             marks[self.cpu.instr_pc] = ['<-']
         for a in range(0, self.machine.code_end, 4):

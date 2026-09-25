@@ -19,6 +19,7 @@ from alu import ALU
 from machine import Machine, load_file
 from microcpu import MicroCPU
 from pipeline import Pipeline
+from cpu import SingleCycleCPU
 
 PROGRAMS = ['sum', 'fact', 'hazard', 'muldiv', 'bubble']
 
@@ -38,7 +39,12 @@ PERIOD = {
 
 def run(name, mode, **alu_opts):
     m = Machine(load_file(f'examples/{name}.s'), alu=ALU(**alu_opts))
-    cpu = Pipeline(m, int(mode[-1])) if mode.startswith('pipe') else MicroCPU(m, mode)
+    if mode == 'single':
+        cpu = SingleCycleCPU(m)
+    elif mode.startswith('pipe'):
+        cpu = Pipeline(m, int(mode[-1]))
+    else:
+        cpu = MicroCPU(m, mode)
     cpu.run()
     return m, cpu
 
@@ -125,7 +131,7 @@ def main():
     ok = True
     for p in PROGRAMS:
         states = set()
-        for mode in ('pipe4', 'pipe6', 'horizontal', 'vertical'):
+        for mode in ('single', 'pipe4', 'pipe6', 'horizontal', 'vertical'):
             for opts in ({'adder': 'ripple', 'multiplier': 'shiftadd', 'divider': 'restoring'},
                          {'adder': 'cla', 'multiplier': 'booth', 'divider': 'nonrestoring'}):
                 m, cpu = run(p, mode, **opts)

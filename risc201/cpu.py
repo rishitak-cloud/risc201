@@ -1,5 +1,5 @@
 """
-cpu.py - single-cycle CPU execution simulator (Member D)
+cpu.py - single-cycle CPU execution simulator (Member C)
 
 The simplest possible processor: one call to step() runs ONE whole
 instruction, start to finish, before the next one begins. No pipeline,
