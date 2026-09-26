@@ -1,0 +1,57 @@
+clock periods used (ps): {'single': 1000, 'pipe6': 270, 'pipe4': 470}
+
+1. PROCESSORS: single-cycle vs 4-stage (IF OF EX+MA RW) vs 6-stage (IF ID OF EX MA RW)
+program   model  instr  cycles    CPI  stalls  flushed  time(ns)
+-------  ------  -----  ------  -----  ------  -------  --------
+    sum  single     64      64    1.0       -        -      64.0
+    sum   pipe4     64      85  1.328       0       18      40.0
+    sum   pipe6     64     106  1.656      10       27      28.6
+   fact  single     79      79    1.0       -        -      79.0
+   fact   pipe4     79     118  1.494       0       36      55.5
+   fact   pipe6     79     143   1.81       5       54      38.6
+ hazard  single      9       9    1.0       -        -       9.0
+ hazard   pipe4      9      14  1.556       0        2       6.6
+ hazard   pipe6      9      19  2.111       2        3       5.1
+ muldiv  single     17      17    1.0       -        -      17.0
+ muldiv   pipe4     17      20  1.176       0        0       9.4
+ muldiv   pipe6     17      22  1.294       0        0       5.9
+ bubble  single    375     375    1.0       -        -     375.0
+ bubble   pipe4    375     504  1.344       0      126     236.9
+ bubble   pipe6    375     605  1.613      36      189     163.3
+
+2. ALU ALGORITHMS on 2000 random operand pairs
+                  op     algorithm          average cost
+--------------------  ------------  --------------------
+                 add        ripple        64 gate delays
+                 add           cla        18 gate delays
+ mul (random 32-bit)      shiftadd  16.0 add/sub per mul
+ mul (random 32-bit)         booth  15.9 add/sub per mul
+mul (small positive)      shiftadd   4.0 add/sub per mul
+mul (small positive)         booth   4.6 add/sub per mul
+mul (small negative)      shiftadd  28.0 add/sub per mul
+mul (small negative)         booth   4.7 add/sub per mul
+                 div     restoring  61.4 add/sub per div
+                 div  nonrestoring  32.5 add/sub per div
+
+   same programs, pipe6, ALU work counted:
+program              adder/mul/div  adds  adder delay  mul add/sub  div add/sub
+-------  -------------------------  ----  -----------  -----------  -----------
+    sum  ripple/shiftadd/restoring    50         3200            0            0
+    sum     cla/booth/nonrestoring    50          900            0            0
+   fact  ripple/shiftadd/restoring    60         3840            8            0
+   fact     cla/booth/nonrestoring    64         1152           12            0
+ hazard  ripple/shiftadd/restoring     6          384            0            0
+ hazard     cla/booth/nonrestoring     6          108            0            0
+ muldiv  ripple/shiftadd/restoring     2          128            2          125
+ muldiv     cla/booth/nonrestoring     2           36            2           64
+ bubble  ripple/shiftadd/restoring   266        17024            0            0
+ bubble     cla/booth/nonrestoring   266         4788            0            0
+
+3. CORRECTNESS: every model and every ALU choice ends in the same state
+   sum      same
+   fact     same
+   hazard   same
+   muldiv   same
+   bubble   same
+
+all models agree
