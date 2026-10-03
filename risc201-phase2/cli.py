@@ -8,6 +8,7 @@ cli.py - interactive simulator and debugger for RISC201 (Member D)
 
   other options:
     --adder ripple|cla   --mul shiftadd|booth   --div restoring|nonrestoring
+    --no-guard           turn the stack safety checks off
 
 Type 'help' inside the debugger for the commands.
 """
@@ -21,13 +22,14 @@ from exceptions import RiscError
 from machine import Machine, load_file
 from pipeline import Pipeline
 from cpu import SingleCycleCPU
+import stackview
 
 MODES = ('single', 'pipe4', 'pipe6')
 
 
-def build(path, mode, alu_opts):
+def build(path, mode, alu_opts, guard):
     prog = load_file(path)
-    machine = Machine(prog, alu=ALU(**alu_opts))
+    machine = Machine(prog, alu=ALU(**alu_opts), guard=guard)
     cpu = SingleCycleCPU(machine) if mode == 'single' else Pipeline(machine, int(mode[-1]))
     return prog, machine, cpu
 
@@ -47,9 +49,9 @@ def format_regs(machine, pc):
 class Debugger(cmd.Cmd):
     intro = "RISC201 simulator. Type 'help' for commands, 'quit' to leave."
 
-    def __init__(self, path, mode, alu_opts):
+    def __init__(self, path, mode, alu_opts, guard):
         super().__init__()
-        self.path, self.mode, self.alu_opts = path, mode, alu_opts
+        self.path, self.mode, self.alu_opts, self.guard = path, mode, alu_opts, guard
         self.prompt = f"({mode}) "
         self.do_reset('', quiet=True)
 
@@ -69,7 +71,7 @@ class Debugger(cmd.Cmd):
 
     def address(self, text):
         text = text.strip()
-        if text in self.machine.symbols: # dictionary mapping label names to their memory addresses, built during assembly
+        if text in self.machine.symbols:
             return self.machine.symbols[text]
         return int(text, 0)
 
@@ -100,7 +102,7 @@ class Debugger(cmd.Cmd):
     # ------------------------------------------------------------------
     def do_reset(self, arg, quiet=False):
         """reset - reload the program and start again"""
-        self.prog, self.machine, self.cpu = build(self.path, self.mode, self.alu_opts)
+        self.prog, self.machine, self.cpu = build(self.path, self.mode, self.alu_opts, self.guard)
         self.error = None
         self.cpu.breakpoints = getattr(self, 'breakpoints', set())
         self.breakpoints = self.cpu.breakpoints
@@ -269,17 +271,21 @@ class Debugger(cmd.Cmd):
         if not self.is_pipe:
             print("diag only makes sense for the pipeline modes")
             return
-        print(self.cpu.diagram(int(arg) if arg.strip() else 12)) # default 12 instructions to be shown
+        print(self.cpu.diagram(int(arg) if arg.strip() else 12))
+
+    def do_stack(self, arg):
+        """stack - ASCII picture of the stack and its frames"""
+        print(stackview.render(self.machine))
 
     def do_dis(self, arg):
         """dis - disassemble the program, marking where execution is"""
         marks = {}
         if self.is_pipe:
-            for name, ins in self.cpu.slot.items(): # self.cpu.slot is a dictionary where keys are the names of the stages and values are the instructions in those stages
+            for name, ins in self.cpu.slot.items():
                 if ins:
-                    marks.setdefault(ins['pc'], []).append(name) 
+                    marks.setdefault(ins['pc'], []).append(name)
         else:
-            marks[self.cpu.pc] = ['<- next'] # marks current pc with next
+            marks[self.cpu.pc] = ['<- next']
         for a in range(0, self.machine.code_end, 4):
             if a in self.machine.labels:
                 print(f"{self.machine.labels[a]}:")
@@ -308,7 +314,7 @@ class Debugger(cmd.Cmd):
 
 
 def parse_args(argv):
-    opts = {'mode': 'pipe6', 'run': False,
+    opts = {'mode': 'pipe6', 'guard': True, 'run': False,
             'alu': {'adder': 'cla', 'multiplier': 'booth', 'divider': 'nonrestoring'}}
     path = None
     i = 0
@@ -322,6 +328,8 @@ def parse_args(argv):
             opts['alu']['multiplier'] = argv[i + 1]; i += 1
         elif a == '--div':
             opts['alu']['divider'] = argv[i + 1]; i += 1
+        elif a == '--no-guard':
+            opts['guard'] = False
         elif a == '--run':
             opts['run'] = True
         else:
@@ -338,7 +346,7 @@ def main(argv):
         print(__doc__)
         return 1
     try:
-        dbg = Debugger(path, opts['mode'], opts['alu'])
+        dbg = Debugger(path, opts['mode'], opts['alu'], opts['guard'])
     except AsmError as e:
         print(f"{path}: error: {e}")
         return 1
