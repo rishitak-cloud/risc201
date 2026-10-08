@@ -129,8 +129,8 @@ class ALU:
         boundaries = 0
         for lo in range(0, 32, k):
             hi = min(lo + k, 32)
-            sum0, carry0 = self._ripple_block(a, b, 0, lo, hi)   # assume cin = 0
-            sum1, carry1 = self._ripple_block(a, b, 1, lo, hi)   # assume cin = 1
+            sum0, carry0 = self._ripple_block(a, b, 0, lo, hi)
+            sum1, carry1 = self._ripple_block(a, b, 1, lo, hi)
             if lo == 0:                                          # first block: real cin
                 chosen_sum, carry = (sum1, carry1) if cin else (sum0, carry0)
             else:                                                # later blocks: the mux
@@ -139,7 +139,7 @@ class ALU:
             total |= chosen_sum
         return total, 2 * k + boundaries
 
-    # ---- carry lookahead: the (G,P) tree of section 8.1.5 ----
+    # ---- carry lookahead ----
     @staticmethod
     def _combine(upper, lower):
         gu, pu = upper
@@ -206,14 +206,9 @@ class ALU:
     # ==================================================================
     @staticmethod
     def _shift_uv_right(u, v):
-        """Arithmetic right shift of the 65-bit pair UV by one position.
-        The bit falling out of U becomes the MSB of V (book section 8.2.2)."""
         return u >> 1, ((v >> 1) | ((u & 1) << 31)) & MASK32
 
     def _iterative(self, n, m):
-        """8.2.2 Iterative Multiplier (book Algorithm 1).
-        n = multiplicand (signed), m = multiplier bits. U starts at 0,
-        V holds the multiplier. Returns (U, V, add/sub count)."""
         u, v, steps = 0, m & MASK32, 0
         for i in range(1, 33):
             if v & 1:
@@ -226,9 +221,6 @@ class ALU:
         return u, v, steps
 
     def _booth(self, n, m):
-        """8.2.3 Booth Multiplier (book Algorithm 2).
-        Looks at the bit pair (current, previous) of the multiplier:
-        1,0 -> subtract;  0,1 -> add;  0,0 and 1,1 -> nothing."""
         u, v, steps, previous = 0, m & MASK32, 0, 0
         for _ in range(32):
             current = v & 1
