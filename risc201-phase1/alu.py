@@ -85,8 +85,8 @@ class ALU:
     MULTIPLIERS = ('iterative', 'booth')
     DIVIDERS = ('restoring', 'nonrestoring')
 
-    CSELECT_BLOCK = 6        # k = sqrt(32), rounded up (book eq. 8.1)
-    CLA_LEAF = 2             # 2-bit ripple adders at the leaves (book fig. 8.9)
+    CSELECT_BLOCK = 6        # k = sqrt(32), rounded up
+    CLA_LEAF = 2             # 2-bit ripple adders at the leaves
 
     def __init__(self, adder='cla', multiplier='booth', divider='nonrestoring'):
         assert adder in self.ADDERS and multiplier in self.MULTIPLIERS \
@@ -104,7 +104,7 @@ class ALU:
         }
 
     # ==================================================================
-    # 8.1  ADDERS
+    # ADDERS
     # ==================================================================
     @staticmethod
     def _full_adder(a, b, cin):
@@ -122,19 +122,10 @@ class ALU:
         return total, carry
 
     def _ripple(self, a, b, cin):
-        """8.1.3 Ripple Carry Adder. The carry crosses all 32 bit positions."""
         total, _ = self._ripple_block(a, b, cin, 0, 32)
         return total, 2 * 32
 
     def _cselect(self, a, b, cin):
-        """8.1.4 Carry Select Adder.
-
-        Each block is added twice at the same time, once for carry-in 0 and
-        once for carry-in 1. When the real carry-in finally arrives, a
-        multiplexer selects one of the two precomputed answers, so the block
-        does NOT have to be added again. The carry therefore crosses one
-        multiplexer per block instead of k full adders.
-        """
         k = self.CSELECT_BLOCK
         total, carry = 0, cin
         boundaries = 0
@@ -160,19 +151,8 @@ class ALU:
         return (gu | (pu & gl), pu & pl)
 
     def _cla(self, a, b, cin):
-        """8.1.5 Carry Lookahead Adder, O(log n).
-
-        Stage I   build a tree of (G,P) blocks from the bit-level
-                  g = a.b and p = a ^ b, each node combining its two children.
-        Stage II  walk the tree back down, handing each node its carry-in;
-                  a node's left child gets the node's carry-in, and its right
-                  child gets the carry coming OUT of the left child,
-                  Cout = G + P.Cin.
-        Stage 0   2-bit ripple adders at the leaves turn the correct carries
-                  into sum bits (book fig. 8.9).
-        """
         leaf = self.CLA_LEAF
-        # ---- Stage I: bottom-up ----
+        # ---- Stage I ----
         levels = []
         level = []
         for lo in range(0, 32, leaf):                 # (G,P) of each leaf block
@@ -193,7 +173,7 @@ class ALU:
                     level.append(below[i])
             levels.append(level)
 
-        # ---- Stage II: top-down, hand every leaf its carry-in ----
+        # ---- Stage II ----
         carry_in = {levels[-1][0][0]: cin}
         for depth in range(len(levels) - 1, 0, -1):
             below = levels[depth - 1]
@@ -205,7 +185,7 @@ class ALU:
                     g, p = below[i][1]                 # Cout = G + P.Cin
                     carry_in[below[i + 1][0]] = g | (p & c)
 
-        # ---- Stage 0: small ripple adders at the leaves ----
+        # ---- Stage 0 ----
         total = 0
         for lo, _ in levels[0]:
             part, _ = self._ripple_block(a, b, carry_in[lo], lo, min(lo + leaf, 32))
@@ -227,7 +207,7 @@ class ALU:
         return self.add(a, ~b & MASK32, 1)          # a - b = a + (~b) + 1
 
     # ==================================================================
-    # 8.2  MULTIPLIERS   (33-bit U, 32-bit V, right shifts)
+    # MULTIPLIERS   (33-bit U, 32-bit V)
     # ==================================================================
     @staticmethod
     def _shift_uv_right(u, v):
@@ -268,8 +248,6 @@ class ALU:
         return u, v, steps
 
     def mul(self, a, b):
-        """Low 32 bits of a * b. The book's multipliers produce a 64-bit
-        product in UV; RISC201 keeps only the low half, which is V."""
         n = to_signed(a)                             # multiplicand, sign extended
         fn = self._booth if self.multiplier == 'booth' else self._iterative
         _, v, steps = fn(n, b)
@@ -278,7 +256,7 @@ class ALU:
         return v & MASK32
 
     # ==================================================================
-    # 8.3  DIVIDERS   (33-bit U, 32-bit V, left shifts, positive operands)
+    # DIVIDERS   (33-bit U, 32-bit V)
     # ==================================================================
     @staticmethod
     def _shift_uv_left(u, v):
@@ -304,9 +282,6 @@ class ALU:
         return v & MASK32, u, steps
 
     def _nonrestoring(self, dividend, divisor):
-        """8.3.3 Non-restoring division (book Algorithm 4).
-        One add OR one subtract per step; never adds back mid-loop.
-        A single correction at the end if U is left negative."""
         u, v, steps = 0, dividend & MASK32, 0
         for _ in range(32):
             u, v = self._shift_uv_left(u, v)
@@ -322,10 +297,6 @@ class ALU:
         return v & MASK32, u, steps
 
     def divmod(self, a, b, pc=None):
-        """Signed divide. The book's algorithms take positive operands, so
-        the magnitudes go through the hardware and the signs are fixed
-        afterwards (book section 8.3.1). Quotient rounds towards zero;
-        the remainder takes the sign of the dividend (same as C / Java)."""
         a, b = to_signed(a), to_signed(b)
         if b == 0:
             raise DivideByZero("division by zero", pc)
@@ -339,8 +310,6 @@ class ALU:
             r = -r
         return q & MASK32, r & MASK32
 
-    # ==================================================================
-    # The single entry point used by the processors
     # ==================================================================
     def compute(self, op, a, b, pc=None):
         a &= MASK32
