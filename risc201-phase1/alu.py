@@ -98,9 +98,9 @@ class ALU:
 
     def reset_stats(self):
         self.stats = {
-            'adds': 0, 'adder_delay': 0,      # every trip through the adder
-            'muls': 0, 'mul_addsub': 0,       # add/sub steps inside multiplies
-            'divs': 0, 'div_addsub': 0,       # add/sub steps inside divides
+            'adds': 0, 'adder_delay': 0, 
+            'muls': 0, 'mul_addsub': 0, 
+            'divs': 0, 'div_addsub': 0, 
         }
 
     # ==================================================================
@@ -108,13 +108,11 @@ class ALU:
     # ==================================================================
     @staticmethod
     def _full_adder(a, b, cin):
-        """Book section 8.1.2:  s = a ^ b ^ cin,  cout = ab + a.cin + b.cin"""
         s = a ^ b ^ cin
         cout = (a & b) | (a & cin) | (b & cin)
         return s, cout
 
     def _ripple_block(self, a, b, cin, lo, hi):
-        """Ripple carry over bits [lo, hi). Returns (sum bits, carry out)."""
         total, carry = 0, cin
         for i in range(lo, hi):
             s, carry = self._full_adder((a >> i) & 1, (b >> i) & 1, carry)
@@ -144,8 +142,6 @@ class ALU:
     # ---- carry lookahead: the (G,P) tree of section 8.1.5 ----
     @staticmethod
     def _combine(upper, lower):
-        """Book eq. 8.9. upper = (G,P) of the higher half, lower = (G,P) of
-        the lower half.  G = Gu + Pu.Gl    P = Pu.Pl"""
         gu, pu = upper
         gl, pl = lower
         return (gu | (pu & gl), pu & pl)
@@ -194,7 +190,6 @@ class ALU:
         return total, 1 + 2 * depth * 2 + 1
 
     def add(self, a, b, cin=0):
-        """32-bit add through the chosen adder. Returns a 32-bit value."""
         a &= MASK32
         b &= MASK32
         fn = {'ripple': self._ripple, 'cselect': self._cselect, 'cla': self._cla}[self.adder]
@@ -260,13 +255,9 @@ class ALU:
     # ==================================================================
     @staticmethod
     def _shift_uv_left(u, v):
-        """Left shift of the pair UV by one position. The MSB of V moves
-        into the LSB of U (book section 8.3.2)."""
         return (u << 1) | ((v >> 31) & 1), (v << 1) & MASK32
 
     def _restoring(self, dividend, divisor):
-        """8.3.2 Restoring division (book Algorithm 3).
-        Subtract; if the result went negative, add the divisor back."""
         u, v, steps = 0, dividend & MASK32, 0
         for _ in range(32):
             u, v = self._shift_uv_left(u, v)
@@ -341,7 +332,6 @@ class ALU:
         raise ValueError(f"ALU has no operation '{op}'")
 
     def compare(self, a, b):
-        """cmp: returns (E, GT). Signed compare, done with the subtractor."""
         diff = self.sub(a, b)
         equal = int(diff == 0)
         greater = int(to_signed(a) > to_signed(b))
