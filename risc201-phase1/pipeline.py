@@ -1,36 +1,3 @@
-"""
-pipeline.py - the 4-stage and 6-stage pipelined processors (Member B)
-
-Both are made from Sarangi's 5-stage pipeline (Chapter 9):
-          IF  OF  EX  MA  RW
-
-  4-stage: IF | OF | EX+MA | RW          EX and MA merged into one stage
-  6-stage: IF | ID | OF | EX | MA | RW   OF split into decode + register read
-
-What each stage does here
-  IF  fetch the word at PC, PC = PC + 4 (always predict "not taken")
-  ID  decode: split the word into fields (6-stage only)
-  OF  decode (4-stage) / read registers
-  EX  ALU, compare (writes flags), branch decision, ld/st address
-  MA  ld reads memory, st writes memory (inside EX in the 4-stage)
-  RW  write the result into the register file
-
-Hazards (in-order pipeline, full forwarding)
-  * Data: EX takes its operands through the forwarding unit: the newest
-    value from the MA latch, else the RW latch, else the register file.
-  * Load-use (6-stage only): a ld in EX gets its data at the END of MA,
-    too late for the next instruction's EX -> stall 1 cycle.
-    In the 4-stage, ld finishes inside EX, so it never stalls.
-  * Control: branches are decided in EX. If taken, the instructions
-    fetched after it (everything before EX) are flushed:
-    2 in the 4-stage (IF, OF), 3 in the 6-stage (IF, ID, OF).
-
-One call to step() = one clock cycle:
-  1. clock edge: every instruction moves one stage forward
-     (or is held for a stall, or thrown away for a flush)
-  2. every stage does its work, oldest instruction first
-  3. look for hazards that decide what happens at the next edge
-"""
 import isa
 from exceptions import MemoryFault, IllegalInstruction
 
