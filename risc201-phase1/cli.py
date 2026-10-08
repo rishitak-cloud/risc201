@@ -1,16 +1,3 @@
-"""
-cli.py - interactive simulator and debugger for RISC201 (Member D)
-
-    python cli.py examples/fact.s                     6-stage pipeline (default)
-    python cli.py examples/fact.s --mode single       single-cycle CPU, one instruction per step
-    python cli.py examples/fact.s --mode pipe4        4-stage pipeline
-    python cli.py examples/sum.s --run                run to the end, print results
-
-  other options:
-    --adder ripple|cla   --mul shiftadd|booth   --div restoring|nonrestoring
-
-Type 'help' inside the debugger for the commands.
-"""
 import cmd
 import sys
 
