@@ -33,7 +33,7 @@ class ALU:
     @staticmethod
     def _full_adder(a, b, cin):
         s = a ^ b ^ cin
-        cout = (a & b) | (a & cin) | (b & cin)
+        cout = (a & b) | (cin & (a ^ b))
         return s, cout
 
     def _ripple_block(self, a, b, cin, lo, hi):

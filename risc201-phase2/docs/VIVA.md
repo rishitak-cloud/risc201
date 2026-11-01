@@ -91,7 +91,7 @@ Each member should be able to (1) explain their part in ~1 minute, (2) run its d
 
 **1-minute pitch:** Every arithmetic, logic and shift operation in all four processor models goes through one ALU class. The adder, multiplier and divider algorithms can be swapped, and the ALU counts their work so we can compare them. The CLI debugger drives any processor model through the same small set of methods (`step`, `show`, `stats`), and adds breakpoints, watches, memory and register inspection and editing.
 
-**Demo:** `python cli.py examples/sum.s --mode pipe4`, then `watch r1`, `c`, `c`, `regs`, `mem array 4`, `stats`. Then `python cli.py examples/muldiv.s --run --mul shiftadd` vs `--mul booth`, and compare `alu.mul_addsub` in the output.
+**Demo:** `python cli.py examples/sum.s --mode pipe4`, then `watch r1`, `c`, `c`, `regs`, `mem array 4`, `stats`. Then `python cli.py examples/mul_compare.s --run --mul shiftadd` vs `--mul booth`, and compare `alu.mul_addsub` in the output.
 
 **Likely questions**
 
