@@ -1,22 +1,3 @@
-"""
-cli.py - interactive simulator and debugger for RISC201 (Member D)
-
-    python cli.py examples/fact.s                     6-stage pipeline (default)
-    python cli.py examples/fact.s --mode single       single-cycle CPU, one instruction per step
-    python cli.py examples/fact.s --mode pipe4        4-stage pipeline
-    python cli.py examples/fact.s --mode horizontal   microprogrammed, horizontal microcode
-    python cli.py examples/fact.s --mode vertical     microprogrammed, vertical microcode
-    python cli.py examples/sum.s --run                run to the end, print results
-
-  other options:
-    --adder ripple|cselect|cla   --mul iterative|booth   --div restoring|nonrestoring
-    --trap-overflow      signed overflow raises ArithmeticOverflow (default: wrap, set V)
-    --round nearest|zero|up|down          IEEE 754 rounding mode
-    --fdiv restoring|newton|goldschmidt   floating point division algorithm
-    --no-guard           turn the stack safety checks off
-
-Type 'help' inside the debugger for the commands.
-"""
 import cmd
 import sys
 
@@ -31,7 +12,11 @@ from cpu import SingleCycleCPU
 from microcpu import MicroCPU
 import stackview
 
-MODES = ('single', 'pipe4', 'pipe6', 'horizontal', 'vertical')
+MICRO_MODES = ('horizontal', 'vertical', 'mixed')
+MODES = ('single', 'pipe4', 'pipe6') + MICRO_MODES
+
+
+PIPE_OPTS = {}                # pipeline options from the command line
 
 
 def build(path, mode, alu_opts, guard):
@@ -40,7 +25,7 @@ def build(path, mode, alu_opts, guard):
     if mode == 'single':
         cpu = SingleCycleCPU(machine)
     elif mode.startswith('pipe'):
-        cpu = Pipeline(machine, int(mode[-1]))
+        cpu = Pipeline(machine, int(mode[-1]), **PIPE_OPTS)
     else:
         cpu = MicroCPU(machine, mode)
     return prog, machine, cpu
@@ -76,7 +61,7 @@ class Debugger(cmd.Cmd):
 
     @property
     def is_micro(self):
-        return self.mode in ('horizontal', 'vertical')
+        return self.mode in MICRO_MODES
 
     @property
     def is_single(self):
@@ -125,6 +110,24 @@ class Debugger(cmd.Cmd):
         self.watches = getattr(self, 'watches', [])
         if not quiet:
             print("reset.")
+
+    def do_mode(self, arg):
+        """mode [name] - show or switch the processor model:
+        single, pipe4, pipe6, horizontal, vertical, mixed.
+        Switching restarts the program (breakpoints and watches are kept),
+        so you can run the same program on two controllers and compare `stats`."""
+        name = arg.strip().lower()
+        if not name:
+            print(f"current mode: {self.mode}")
+            print(f"available:    {', '.join(MODES)}")
+            return
+        if name not in MODES:
+            print(f"unknown mode '{name}'. choose one of: {', '.join(MODES)}")
+            return
+        self.mode = name
+        self.prompt = f"({name}) "
+        self.do_reset('', quiet=True)
+        print(f"switched to {name}; program restarted")
 
     def do_step(self, arg):
         """step [n] - n clock cycles (pipeline) or n micro-steps (microprogrammed)"""
@@ -314,16 +317,24 @@ class Debugger(cmd.Cmd):
     def do_ucode(self, arg):
         """ucode - print the control memory (microprogrammed modes)"""
         if not self.is_micro:
-            print("ucode is for --mode horizontal / vertical")
+            print("ucode is for --mode horizontal / vertical / mixed")
             return
         print(self.cpu.cm.listing())
 
     def do_upc(self, arg):
         """upc - the microprogram state: microPC, internal registers, last micro-steps"""
         if not self.is_micro:
-            print("upc is for --mode horizontal / vertical")
+            print("upc is for --mode horizontal / vertical / mixed")
             return
         print(self.cpu.show())
+
+    def do_uprof(self, arg):
+        """uprof - microcode profile: how often each control-memory word ran
+        (ASCII bars), words and signals never used, instruction mix"""
+        if not self.is_micro:
+            print("uprof is for --mode horizontal / vertical / mixed")
+            return
+        print(self.cpu.profile_report())
 
     def do_stack(self, arg):
         """stack - ASCII picture of the stack and its frames"""
@@ -389,6 +400,16 @@ def parse_args(argv):
             opts['alu']['divider'] = argv[i + 1]; i += 1
         elif a == '--no-guard':
             opts['guard'] = False
+        elif a == '--predict':
+            PIPE_OPTS['predictor'] = argv[i + 1]; i += 1
+        elif a == '--store-fwd':
+            PIPE_OPTS['store_forwarding'] = True
+        elif a == '--mul-latency':
+            PIPE_OPTS['mul_latency'] = int(argv[i + 1]); i += 1
+        elif a == '--div-latency':
+            PIPE_OPTS['div_latency'] = int(argv[i + 1]); i += 1
+        elif a == '--unified-mem':
+            PIPE_OPTS['unified_memory'] = True
         elif a == '--trap-overflow':
             opts['alu']['trap_overflow'] = True
         elif a == '--round':
@@ -408,7 +429,8 @@ def parse_args(argv):
 def main(argv):
     path, opts = parse_args(argv)
     if not path:
-        print(__doc__)
+        print("usage: python cli.py program.s [--mode single|pipe4|pipe6|horizontal|vertical|mixed]"
+              " [--run] [options]")
         return 1
     try:
         dbg = Debugger(path, opts['mode'], opts['alu'], opts['guard'])

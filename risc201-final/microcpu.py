@@ -1,22 +1,5 @@
-"""
-microcpu.py - the microprogrammed (non-pipelined) processor (Member C, item 3)
-
-This is Sarangi's microprogrammed processor idea (Chapter 8): the
-datapath is a set of registers joined by buses, and the CONTROL comes
-entirely from the control memory in microcode.py. There is no
-"if opcode == add" anywhere in the control path - the only place an
-opcode is looked at is the DISPATCH table.
-
-One call to micro_step() = one clock cycle = one microinstruction:
-    1. word   = control_memory[microPC]
-    2. decode the word into signals + sequencing (vertical needs a
-       decoder here; horizontal signals are just bits)
-    3. work out the next microPC from values at the START of the cycle
-    4. perform every signal (register transfers)
-    5. microPC = next
-"""
 import isa
-from microcode import ControlMemory
+from microcode import ControlMemory, SIGNALS
 from exceptions import MicrocodeFault, IllegalInstruction, MemoryFault
 
 
@@ -39,6 +22,10 @@ class MicroCPU:
         self.breakpoints = set()
         self.hit_breakpoint = None
         self.instr_pc = 0         # pc of the instruction being executed
+        # profile counters (for `uprof`)
+        self.upc_hits = [0] * len(self.cm.rom)    # how often each ROM word ran
+        self.signal_hits = {}                     # how often each signal fired
+        self.opcode_hits = {}                     # how often each opcode was dispatched
 
     # ------------------------------------------------------------------
     # The datapath: what each control signal does
@@ -105,7 +92,7 @@ class MicroCPU:
             return target if self.m.flags.GT else self.upc + 1
         if seq == 'DISPATCH':
             opcode = (self.IR >> 27) & 0x1F           # opcode bits straight from IR
-            name = isa.NAMES.get(opcode)
+            name = isa.decode(self.IR)['name']         # None also for reserved modifier 11
             if name not in self.cm.dispatch:
                 raise IllegalInstruction(f"opcode {opcode:#07b} has no micro-routine",
                                          self.instr_pc)
@@ -126,13 +113,23 @@ class MicroCPU:
             self.m.pc_now = self.pc
 
         word = self.cm.rom[self.upc]
-        signals, seq, target = self.cm.decode(word)
+        try:
+            signals, seq, target = self.cm.decode(word)
+        except IndexError:                             # bit pattern names no signal / sequencing
+            raise MicrocodeFault(f"control word {self.upc} ({word:#x}) is not a valid "
+                                 f"microinstruction", self.instr_pc)
         before = self.upc
         self.m.pc_now = self.instr_pc
         nxt = self.next_upc(seq, target)               # uses start-of-cycle values
         for s in signals:
             self.perform(s)
         self.cycle += 1
+        self.upc_hits[before] += 1
+        for sig in signals:
+            self.signal_hits[sig] = self.signal_hits.get(sig, 0) + 1
+        if seq == 'DISPATCH':
+            op = isa.NAMES.get((self.IR >> 27) & 0x1F)
+            self.opcode_hits[op] = self.opcode_hits.get(op, 0) + 1
         self.upc = nxt
         if seq == 'FETCH':
             self.retired += 1
@@ -174,7 +171,45 @@ class MicroCPU:
             'rom_words': len(self.cm.rom),
             'rom_width': self.cm.width,
             'rom_bits': self.cm.size_bits(),
+            'rom_words_used': sum(1 for h in self.upc_hits if h),
         }
+
+    # ------------------------------------------------------------------
+    # Profile of the control memory (debugger command `uprof`)
+    # ------------------------------------------------------------------
+    def profile_report(self, bar_width=30):
+        names = {i: lab for lab, i in self.cm.labels.items()}
+        total = self.cycle
+        top = max(self.upc_hits) or 1
+        lines = [f"microcode profile ({self.style}): {total} micro-cycles, "
+                 f"{self.retired} instructions",
+                 "  uPC label    hits   share  " + "bar".ljust(bar_width) + "  signals"]
+        for i, word in enumerate(self.cm.rom):
+            hits = self.upc_hits[i]
+            signals, seq, _ = self.cm.decode(word)
+            bar = '#' * max(1, round(bar_width * hits / top)) if hits else ''
+            share = f"{100 * hits / total:5.1f}%" if total else "   -  "
+            what = ', '.join(signals) or '-'
+            lines.append(f"  {i:3d} {names.get(i, ''):7s} {hits:6d} {share}  "
+                         f"{bar:{bar_width}s}  {what}  [{seq}]")
+        unused = [i for i, h in enumerate(self.upc_hits) if not h]
+        used = len(self.upc_hits) - len(unused)
+        lines.append("")
+        lines.append(f"  control memory used: {used} of {len(self.upc_hits)} words "
+                     f"({100 * used / len(self.upc_hits):.0f}%)")
+        if unused:
+            lines.append("  never executed: " + ', '.join(
+                f"{i}{'(' + names[i] + ')' if i in names else ''}" for i in unused))
+        if self.signal_hits:
+            ranked = sorted(self.signal_hits.items(), key=lambda kv: -kv[1])
+            lines.append("  busiest signals: " + ', '.join(f"{s} x{n}" for s, n in ranked[:5]))
+            idle = [s for s in SIGNALS if s not in self.signal_hits]
+            if idle:
+                lines.append("  signals never fired: " + ', '.join(idle))
+        if self.opcode_hits:
+            ranked = sorted(self.opcode_hits.items(), key=lambda kv: -kv[1])
+            lines.append("  instruction mix: " + ', '.join(f"{o} x{n}" for o, n in ranked))
+        return '\n'.join(lines)
 
     def format_step(self, st):
         names = {i: lab for lab, i in self.cm.labels.items()}

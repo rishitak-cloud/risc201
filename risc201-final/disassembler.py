@@ -1,16 +1,3 @@
-"""
-disassembler.py - machine code back to assembly (Member A)
-
-Reads a .hex file (8 hex digits per line) or a .bin file (32 bits per
-line), decodes every word with isa.decode and prints assembly.
-
-Branch targets become labels L0, L1, ... so the output can be fed back
-into the assembler (round trip: .s -> .hex -> .s -> .hex gives the same
-words; see tests).
-
-Usage
-    python disassembler.py prog.hex
-"""
 import sys
 import isa
 
@@ -63,7 +50,7 @@ def disassemble(words, code_end=None):
 
 def main(argv):
     if not argv:
-        print(__doc__)
+        print("usage: python disassembler.py program.hex")
         return 1
     words, code_end = read_words(open(argv[0]).read())
     print('\n'.join(disassemble(words, code_end)))

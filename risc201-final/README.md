@@ -2,18 +2,22 @@
 
 **Complete: every item of the assignment PDF (1a–1c, 2a–2g, 3, 4, 5), plus integer overflow handling and IEEE 754 floating point.**
 
-The ISA follows **SimpleRisc** (Sarangi, Ch. 3); the ALU algorithms follow Sarangi Ch. 8. Plain Python 3, no libraries needed.
+The ISA follows **SimpleRisc**; the ALU and FPU algorithms follow the course textbook's computer arithmetic chapter. Plain Python 3, no libraries needed.
 
 ## Quick start
 
 ```bash
-python tests/test_all.py                          # 24 tests, all should pass
+python tests/test_all.py                          # 43 tests + A's 35 toolchain tests
 python bench.py                                   # full evaluation (item 5)
 python cli.py examples/fact.s --mode single       # single-cycle CPU
 python cli.py examples/fact.s                     # 6-stage pipeline (default)
 python cli.py examples/hazard.s --mode pipe4      # 4-stage pipeline
+python cli.py examples/sum.s --predict 2bit --store-fwd --run   # pipeline features
 python cli.py examples/sum.s --mode horizontal    # microprogrammed, horizontal
 python cli.py examples/sum.s --mode vertical      # microprogrammed, vertical
+python cli.py examples/sum.s --mode mixed         # microprogrammed, field-encoded
+python verify.py examples/fact.s                  # lockstep check of all 3 control units
+python verify.py examples/sum.s --mutate          # fault injection into the control memory
 python cli.py examples/smash.s --run              # stack corruption caught
 python microcode.py                               # both control memories
 python alu.py                                     # ALU self-check + delay table
@@ -30,7 +34,7 @@ python disassembler.py examples/fact.hex
 |---|---|---|---|
 | A | 2a, 2b, 2e, 2g (+ ISA design) | `isa.py`, `assembler.py`, `disassembler.py`, `preprocessor.py`, `stackview.py` | `instruction_formats` |
 | B | 1a, 2c (pipeline sim), 2f | `pipeline.py`, `machine.py`, `exceptions.py` | `pipeline_4stage`, `pipeline_6stage` |
-| C | 1b, 2d (CPU simulator), 3 | `microcode.py`, `microcpu.py`, `cpu.py` | `control_unit` |
+| C | 1b, 2d (CPU simulator), 3 | `microcode.py`, `microcpu.py`, `cpu.py`, `verify.py` | `control_unit` |
 | D | 1c, 2c (CLI), 2d (debugger), 4, overflow, FP | `alu.py`, `fpu.py`, `cli.py` | `alu` |
 | all | 5 | `bench.py`, `examples/` — each member presents their own section | `ownership` |
 
@@ -52,7 +56,11 @@ python disassembler.py examples/fact.hex
 | 4 ALU class drives all arithmetic, shift, logic | `alu.py`, used by all five models |
 | 5 evaluation: stages, programs, H vs V, ALU algorithms | `bench.py`, `docs/results.txt`, DESIGN §6 |
 | *Extra (asked at mid-eval)*: integer overflow | `alu.py` — V flag, `--trap-overflow`, DESIGN §3 |
-| *Extra (asked at mid-eval)*: IEEE 754 floating point | `fpu.py`, 7 new instructions, DESIGN §3, ISA.md |
+| *Extra (asked at mid-eval)*: IEEE 754 floating point | `fpu.py`, 9 new instructions incl. `fsqrt` and `froot` (n-th root), DESIGN §3, ISA.md |
+| *Extra (our own)*: radix-4 Booth multiplier | `alu.py`, DESIGN §3 "Beyond the book" |
+| *Extra (our own)*: branch prediction (BTB + BHT + RAS), store forwarding, precise exceptions, multi-cycle units, unified memory | `pipeline.py`, DESIGN §1 "Beyond the book" |
+| *Extra (our own)*: toolchain test suite with fuzzing; coloured stack view | `tests/test_toolchain.py`, `stackview.py` |
+| *Extra (our own)*: mixed field-encoded microcode, microcode profiler, lockstep verifier + fault injection | `microcode.py`, `microcpu.py`, `verify.py`, DESIGN §2 |
 
 ## The five processor models
 
@@ -63,6 +71,7 @@ python disassembler.py examples/fact.hex
 | `pipe6` | IF · ID · OF · EX · MA · RW | one clock cycle |
 | `horizontal` | microprogrammed, horizontal microcode | one micro-cycle |
 | `vertical` | microprogrammed, vertical microcode | one micro-cycle |
+| `mixed` | microprogrammed, field-encoded microcode | one micro-cycle |
 
 ## Debugger commands
 
@@ -81,20 +90,22 @@ python disassembler.py examples/fact.hex
 | `diag [n]` | pipeline timing diagram |
 | `upc` | microPC, internal registers, last micro-steps |
 | `ucode` | control memory listing |
+| `uprof` | microcode profile: hits per control word, unused words and signals, instruction mix |
+| `mode <name>` | switch processor model on the fly (restarts the program, keeps breakpoints) |
 | `stack` | ASCII stack with frame boundaries |
 | `dis` | disassembly with current position |
 | `stats` | cycles, CPI, stalls, flushes, ALU work |
 | `reset`, `quit` | |
 
-Options: `--mode single|pipe4|pipe6|horizontal|vertical`, `--adder ripple|cselect|cla`, `--mul iterative|booth`, `--div restoring|nonrestoring`, `--trap-overflow`, `--round nearest|zero|up|down`, `--fdiv restoring|newton|goldschmidt`, `--no-guard`, `--run`.
+Options: `--mode single|pipe4|pipe6|horizontal|vertical|mixed`, `--adder ripple|cselect|cla`, `--mul iterative|booth|booth4`, `--div restoring|nonrestoring`, `--trap-overflow`, `--round nearest|zero|up|down`, `--predict none|1bit|2bit`, `--store-fwd`, `--mul-latency N`, `--div-latency N`, `--unified-mem`, `--fdiv restoring|newton|goldschmidt`, `--no-guard`, `--run`.
 
 ## Demo script (final evaluation)
 
 1. **A:** `python assembler.py examples/fact.s -l fact.lst` → `push {r2, ra}` became three instructions. Then `python disassembler.py examples/fact.hex`. Then `fact.s` → `break done`, `c`, `stack` (six frames).
-2. **B:** `hazard.s --mode pipe6` → `step 10`, `diag`; then `--mode pipe4`. Then `smash.s --run` (caught) and `--no-guard` (jumps to 0xBEEF).
-3. **C:** `sum.s --mode vertical` → `ucode`, `next`, `next`, `upc`; then `--mode horizontal`. Show `bench.py` section 3.
-4. **D:** `matmul.s --run --mul iterative` vs `--mul booth`. `ovf.s --run`, then with `--trap-overflow`. `fp.s` → `c`, `fregs`. Show `python fpu.py`.
-5. **Everyone:** `python bench.py` section 7 — all 150 runs agree.
+2. **B:** `hazard.s --mode pipe6` → `step 10`, `diag`; then `--mode pipe4`. Then `sum.s --run` vs `sum.s --predict 2bit --run` (106 → 85 cycles) and `bench.py` section 1b. Then `smash.s --run` (caught) and `--no-guard` (jumps to 0xBEEF).
+3. **C:** `sum.s --mode vertical` → `next`, `upc`, then `mode mixed`, `c`, `uprof`. Then `python verify.py examples/sum.s --flip horizontal 3 20` (bug caught) and `--mutate`. Show `bench.py` section 2b (design space).
+4. **D:** `matmul.s --run --mul booth` vs `--mul booth4` (315 → 240 add/subs). `ovf.s --run --trap-overflow`. `fp.s` → `c`, `fregs`.
+5. **Everyone:** `python bench.py` section 7 — all 240 runs agree.
 
 ## Examples
 
@@ -108,7 +119,7 @@ Options: `--mode single|pipe4|pipe6|horizontal|vertical`, `--adder ripple|cselec
 | `fib.s` | ALU-only dependence chains | r1 = 6765 |
 | `gcd.s` | division-heavy | r1 = 21 |
 | `matmul.s` | multiply-heavy, negatives, memory | r10 = −14, r11 = −54 |
-| `fp.s` | every float instruction, rounding error, overflow to ∞ | see `fregs` |
+| `fp.s` | every float instruction, rounding error, overflow to ∞, √, ∛ | see `fregs` |
 | `ovf.s` | integer overflow: wrap vs trap | r2 = −2³¹, V = 1 |
 | `overflow.s` | runaway recursion | StackOverflow |
 | `smash.s` | overwritten return address | ProtectionFault |

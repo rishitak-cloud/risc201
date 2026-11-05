@@ -1,98 +1,3 @@
-"""
-alu.py - the RISC201 ALU (Member D)
-
-Every add, sub, mul, div, mod, compare, logic and shift in the simulators
-goes through ALU.compute() or ALU.compare().
-
-All the hardware algorithms here follow Sarangi, "Computer Organisation
-and Architecture", Chapter 8 (Computer Arithmetic). Section numbers are
-given so each one can be checked against the book.
-
-  adder      'ripple'   8.1.3 Ripple Carry Adder     O(n)
-                        half adder for bit 1, then 31 full adders; the
-                        carry walks all the way from the LSB to the MSB.
-             'cselect'  8.1.4 Carry Select Adder     O(sqrt(n))
-                        blocks of k bits; each block is added TWICE in
-                        parallel, once assuming carry-in 0 and once
-                        assuming 1, and a multiplexer picks the right
-                        answer when the real carry arrives. Optimal
-                        k = sqrt(n) (book eq. 8.1), so k = 6 for n = 32.
-             'cla'      8.1.5 Carry Lookahead Adder  O(log(n))
-                        a TREE of (G,P) blocks. Stage I combines the
-                        generate / propagate functions of two child
-                        blocks with the book's rule (eq. 8.9):
-                            G(1,n) = G(m+1,n) + P(m+1,n).G(1,m)
-                            P(1,n) = P(m+1,n).P(1,m)
-                        Stage II pushes carries back down the tree, and
-                        2-bit ripple adders at the leaves make the sum.
-
-  multiplier 'iterative' 8.2.2 Iterative Multiplier   O(n log n)
-                         33-bit U, 32-bit V, multiplicand in N.
-                         Multiplier sits in V. Each step: if LSB(V) = 1
-                         then U += N (but U -= N on the LAST step, which
-                         is how a negative multiplier is handled), then
-                         arithmetic right shift the pair UV.
-             'booth'     8.2.3 Booth Multiplier
-                         Same U/V datapath, but it looks at the bit PAIR
-                         (current, previous) of the multiplier:
-                            1,0 -> U = U - N   (a run of 1s starts)
-                            0,1 -> U = U + N   (a run of 1s ends)
-                            0,0 / 1,1 -> nothing
-                         A run of j-i+1 additions becomes one add and
-                         one subtract (book eq. 8.10), so it is much
-                         faster on runs of 1s. Same complexity class.
-
-  divider    'restoring'    8.3.2  U = U - D; if that went negative, add
-                            D back ("restore"). Up to TWO add/subtracts
-                            per step.
-             'nonrestoring' 8.3.3  if U >= 0 then U = U - D else
-                            U = U + D. Exactly ONE add/subtract per
-                            step, plus one final correction if U < 0.
-
-OVERFLOW (signed, 2's complement)
-  Detected for add, sub, mul and div, the same way hardware does it:
-    add   overflow if A and B have the same sign and the result's sign differs
-    sub   overflow if A and B have different signs and the result's sign
-          differs from A's
-    mul   the multiplier already builds the full 64-bit product in UV
-          (book 8.2.2); overflow if it does not fit in 32 signed bits
-    div   only -2^31 / -1 overflows (the answer, +2^31, does not fit)
-  Two policies, chosen when the ALU is built:
-    wrap (default)  keep the low 32 bits, like C and RISC-V, and set the V
-                    flag so the debugger can show it
-    trap            raise ArithmeticOverflow at the exact PC, like MIPS add
-  ld/st address arithmetic and cmp do not touch V.
-
-FLOATING POINT
-  fadd fsub fmul fdiv fcmp itof ftoi go to the FPU in fpu.py (IEEE 754
-  single precision, book 8.4 - 8.6). The FPU reuses this ALU's adder and
-  multiplier for the significands.
-
-The multiplier and divider share one datapath shape, straight from the
-book: a 33-bit U (the extra bit stops overflow when N or D is added to
-it, book Important Points 9-12) joined to a 32-bit V, shifted as one
-65-bit register. Multiplication shifts UV RIGHT, division shifts it LEFT.
-
-All versions give the same answers. They differ in how much work they
-do, which the ALU counts in self.stats (used by bench.py).
-
-Delay model, in gate levels. Stated openly; these are our assumptions,
-not the book's numbers, but they follow the book's complexity classes:
-  ripple   2 per bit                            = 2*32      = 64
-  cselect  2k to add a block, then 1 mux per
-           block boundary (5 boundaries)        = 2*6 + 5   = 17
-  cla      1 (make g,p) + 2 per tree level, up
-           the tree and back down (4 levels),
-           + 1 (final xor)                      = 1+2*4*2+1 = 18
-Run `python alu.py` to print these and to check every algorithm against
-Python's own arithmetic.
-
-Note what the numbers say: at n = 32 the carry select adder (17) is
-already as good as the lookahead adder (18) -- sqrt(32) = 5.7 and
-log2(32) = 5 are close. The lookahead adder pulls ahead as n grows,
-because log(n) beats sqrt(n); at n = 1024 it would be 1+2*9*2+1 = 38
-against 2*32 + 31 = 95.
-"""
 from isa import MASK32, to_signed
 from exceptions import DivideByZero, ArithmeticOverflow
 from fpu import FPU
@@ -102,7 +7,7 @@ MASK33 = (1 << 33) - 1
 
 class ALU:
     ADDERS = ('ripple', 'cselect', 'cla')
-    MULTIPLIERS = ('iterative', 'booth')
+    MULTIPLIERS = ('iterative', 'booth', 'booth4')
     DIVIDERS = ('restoring', 'nonrestoring')
 
     CSELECT_BLOCK = 6        # k = sqrt(32), rounded up (book eq. 8.1)
@@ -294,6 +199,30 @@ class ALU:
             u, v = self._shift_uv_right(u, v)
         return u, v, steps
 
+    # Radix-4 Booth: (b[i+1], b[i], b[i-1]) -> multiple of N to add
+    BOOTH4 = {0b000: 0, 0b001: 1, 0b010: 1, 0b011: 2,
+              0b100: -2, 0b101: -1, 0b110: -1, 0b111: 0}
+
+    def _booth4(self, n, m):
+        """Radix-4 Booth (book exercise 15). Three bits per step, UV shifted
+        right by TWO, 16 steps. Each step adds 0, +-N or +-2N; 2N is N
+        shifted left, so it is still a single add/sub. U needs 34 bits."""
+        u, v, steps, previous = 0, m & MASK32, 0, 0
+        for _ in range(16):
+            triple = ((v & 0b11) << 1) | previous
+            multiple = self.BOOTH4[triple]
+            if multiple:
+                u = u + multiple * n
+                steps += 1
+            previous = (v >> 1) & 1
+            v = ((v >> 2) | ((u & 0b11) << 30)) & MASK32      # shift UV right by 2
+            u >>= 2
+        return u, v, steps
+
+    def multiplier_fn(self):
+        return {'iterative': self._iterative, 'booth': self._booth,
+                'booth4': self._booth4}[self.multiplier]
+
     def mul(self, a, b):
         """Low 32 bits of a * b. The book's multipliers produce a 64-bit
         product in UV; RISC201 keeps only the low half, which is V."""
@@ -303,8 +232,7 @@ class ALU:
         """(low 32 bits, overflowed?). The full product is (U << 32) | V;
         it overflows if it is not just V sign-extended."""
         n = to_signed(a)                             # multiplicand, sign extended
-        fn = self._booth if self.multiplier == 'booth' else self._iterative
-        u, v, steps = fn(n, b)
+        u, v, steps = self.multiplier_fn()(n, b)
         self.stats['muls'] += 1
         self.stats['mul_addsub'] += steps
         product = (u << 32) | v                      # signed 64-bit result
@@ -420,6 +348,10 @@ class ALU:
             return q
         if op in ('fadd', 'fsub', 'fmul', 'fdiv'):
             return getattr(self.fpu, op[1:])(a, b)
+        if op == 'fsqrt':
+            return self.fpu.sqrt(b)
+        if op == 'froot':
+            return self.fpu.root(a, b)                 # B holds n
         if op == 'itof':
             return self.fpu.from_int(b)
         if op == 'ftoi':
@@ -468,5 +400,7 @@ if __name__ == '__main__':
                 print(f"  ok  {adder:8s} {mul:9s} {div}")
     for adder in ALU.ADDERS:
         alu = ALU(adder=adder)
-        alu.add(0, 0)
-        print(f"{adder:8s} delay {alu.stats['adder_delay']} gate levels")
+        for _ in range(2000):
+            alu.add(rng.getrandbits(32), rng.getrandbits(32))
+        print(f"{adder:12s} average delay {alu.stats['adder_delay'] / alu.stats['adds']:5.1f} gate levels"
+              f" (random operands)")

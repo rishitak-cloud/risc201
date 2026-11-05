@@ -1,51 +1,4 @@
-"""
-fpu.py - IEEE 754 single-precision floating point unit (Member D)
-
-Follows Sarangi, "Computer Organisation and Architecture", Chapter 8:
-  8.4  addition / subtraction  (flowchart: book figure 8.17)
-  8.4.2-8.4.3  rounding with guard, round and sticky bits (book table 8.6)
-  8.5  multiplication          (flowchart: book figure 8.18)
-  8.6  division: simple (restoring), Goldschmidt, Newton-Raphson
-
-Registers hold the raw 32-bit IEEE pattern; RISC201 has no separate
-float register file (the same idea as RISC-V's Zfinx extension).
-
-    | S (1) | E (8, bias 127) | mantissa M (23) |
-
-    normal     E = 1..254   value = (-1)^S x 1.M x 2^(E-127)
-    denormal   E = 0, M!=0  value = (-1)^S x 0.M x 2^(-126)
-    zero       E = 0, M=0   (+0 and -0)
-    infinity   E = 255, M=0
-    NaN        E = 255, M!=0
-
-HOW A RESULT IS BUILT (round_and_pack, used by every operation)
-  Every operation produces an exact-or-sticky integer significand W and an
-  exponent. W keeps 3 extra bits below the 23 mantissa bits:
-
-      ... 1 . m22 ... m0 | G R S
-                           guard, round, sticky (book 8.4.3)
-
-  sticky = OR of every bit that was shifted out, so the rounding decision
-  still "sees" bits that are gone. Then:
-    1. normalise: shift W so the hidden 1 is in place, adjusting E
-    2. if E < 1, shift right more and produce a DENORMAL
-    3. round using book table 8.6 (four IEEE rounding modes)
-    4. renormalise if rounding carried out (1.111..1 + 1 = 10.000..0)
-    5. E >= 255 -> OVERFLOW: infinity (or the largest float, depending on
-       the rounding mode)
-
-IEEE exceptions are NOT traps: the standard's default is to produce a
-special value and set a status flag. self.status records:
-  invalid    0/0, inf-inf, 0 x inf, NaN compare, out-of-range ftoi  -> NaN
-  divzero    x / 0                                                   -> +-inf
-  overflow   too large for a float                                   -> +-inf
-  underflow  tiny AND inexact (result became denormal or zero)
-  inexact    rounding threw away a non-zero residue
-
-The significand add and multiply REUSE the integer ALU's adder and
-multiplier hardware (book 8.4: "most of the algorithms for integer
-arithmetic can be ported to floating point").
-"""
+import math
 import struct
 from fractions import Fraction
 
@@ -66,6 +19,11 @@ DIVIDERS = ('restoring', 'newton', 'goldschmidt')
 # ---------------------------------------------------------------------------
 # Converting between Python floats and bit patterns (assembler, CLI, tests)
 # ---------------------------------------------------------------------------
+def isa_signed(v):
+    v &= 0xFFFFFFFF
+    return v - (1 << 32) if v >> 31 else v
+
+
 def float_to_bits(value):
     return struct.unpack('<I', struct.pack('<f', value))[0]
 
@@ -125,7 +83,8 @@ class FPU:
 
     def reset_stats(self):
         self.status = {'invalid': 0, 'divzero': 0, 'overflow': 0, 'underflow': 0, 'inexact': 0}
-        self.stats = {'fadds': 0, 'fmuls': 0, 'fdivs': 0, 'div_steps': 0}
+        self.stats = {'fadds': 0, 'fmuls': 0, 'fdivs': 0, 'div_steps': 0,
+                      'fsqrts': 0, 'froots': 0, 'root_steps': 0}
 
     def _flag(self, name):
         self.status[name] += 1
@@ -238,8 +197,7 @@ class FPU:
         produces a 64-bit product in UV, wide enough for 24 x 24 bits."""
         if self.alu is None:
             return pa * pb
-        fn = self.alu._booth if self.alu.multiplier == 'booth' else self.alu._iterative
-        u, v, _ = fn(pa, pb)
+        u, v, _ = self.alu.multiplier_fn()(pa, pb)
         return (u << 32) | v
 
     def mul(self, a, b):
@@ -339,6 +297,95 @@ class FPU:
         return self.round_and_pack(s, E, q, fb)
 
     # ------------------------------------------------------------------
+    # n-th root  (book exercise 33, generalised from square root to any n)
+    # ------------------------------------------------------------------
+    MAX_ROOT = 255
+    SEED_BITS = 8            # size of the seed lookup table index
+
+    def _iroot_newton(self, N, n):
+        """floor(N ** (1/n)) for integers, by Newton-Raphson on f(x) = x^n - N:
+            x <- x - f/f' = ((n - 1) x + N / x^(n-1)) / n
+        For n = 2 this is the familiar (x + N/x) / 2.
+
+        Seed: real hardware reads a first guess from a small lookup table
+        indexed by the leading bits. We model an 8-bit table: the seed is
+        computed from the top 8 bits of N only, rounded UP so the guess is
+        ABOVE the root. From above, Newton falls every step (the error
+        roughly squares: 8 -> 16 -> 32 good bits), so the first value that
+        stops falling is the root. A final correction makes it exact."""
+        bits = N.bit_length()
+        top = min(self.SEED_BITS, bits)
+        lead = (N >> (bits - top)) or 1                      # leading 8 bits = table index
+        log2_root = (math.log2(lead + 1) + (bits - top)) / n # +1: round the index UP
+        x = int(2.0 ** log2_root) + 2                        # seed, safely above the root
+        while True:
+            self.stats['root_steps'] += 1
+            y = ((n - 1) * x + N // x ** (n - 1)) // n
+            if y >= x:
+                break
+            x = y
+        while x ** n > N:                                    # final correction
+            x -= 1
+        while (x + 1) ** n <= N:
+            x += 1
+        return x
+
+    def root(self, x, n):
+        """froot rd, rs1, n: the n-th root of a float, CORRECTLY ROUNDED,
+        for n = 1 .. 255 (fsqrt is the case n = 2).
+
+        Same three steps as the square root, each one generalised:
+          1. value = P x 2^t. Make t a MULTIPLE OF n (shift P left by t mod n)
+             so the exponent divides exactly: root(P x 2^t) = root(P) x 2^(t/n).
+          2. widen P by 27n bits (a multiple of n) so the integer root has the
+             24 + guard/round/sticky bits we need, then take the integer n-th
+             root by Newton-Raphson.
+          3. exact check: is root^n == the widened P? If not, that is the
+             sticky bit, and the normal rounding logic does the rest.
+
+        Signs: a negative number has a real odd root (cube root of -8 = -2)
+        but no real even root (NaN, 'invalid').  root(+-0) follows IEEE
+        754-2008 rootn: -0 for odd n, +0 for even n."""
+        self.stats['froots'] += 1
+        n = isa_signed(n)
+        if not 1 <= n <= self.MAX_ROOT:
+            self._flag('invalid')
+            return QNAN
+        if n == 1 or is_nan(x):
+            return QNAN if is_nan(x) else x
+        s = (x >> 31) & 1
+        odd = n & 1
+        if s and not odd and not is_zero(x):
+            self._flag('invalid')                          # even root of a negative
+            return QNAN
+        if is_zero(x):
+            return (s << 31) if odd else 0
+        if is_inf(x):
+            return x
+        p, e = significand(x)
+        while p < HIDDEN:                                  # normalise a denormal
+            p <<= 1
+            e -= 1
+        t = e - BIAS - FRAC                                # |value| = p x 2^t
+        r = t % n                                          # make t a multiple of n
+        p <<= r
+        t -= r
+        widen = 27 * n                                     # a multiple of n
+        N = p << widen                                     # |value| = N x 2^(t - widen)
+        rt = self._iroot_newton(N, n)
+        sticky = 1 if rt ** n != N else 0
+        return self.round_and_pack(s if odd else 0, BIAS + (t - widen) // n,
+                                   (rt << 1) | sticky, 1)
+
+    def sqrt(self, x):
+        """fsqrt = froot with n = 2. The one difference is IEEE's rule for
+        sqrt(-0), which is -0 (rootn(-0, 2) is +0)."""
+        self.stats['fsqrts'] += 1
+        if is_zero(x):
+            return x
+        return self.root(x, 2)
+
+    # ------------------------------------------------------------------
     # Comparison and conversions
     # ------------------------------------------------------------------
     def compare(self, a, b):
@@ -404,4 +451,9 @@ if __name__ == '__main__':
     print("0 / 0           ", show(f.div(0, 0)))
     print("itof(-7)        ", show(f.from_int(-7 & MASK32)))
     print("ftoi(-2.75)     ", f.to_int(float_to_bits(-2.75)) - (1 << 32))
+    print("sqrt(2)         ", show(f.sqrt(float_to_bits(2.0))))
+    print("sqrt(-1)        ", show(f.sqrt(float_to_bits(-1.0))))
+    print("cube root(-27)  ", show(f.root(float_to_bits(-27.0), 3)))
+    print("5th root(1e10)  ", show(f.root(float_to_bits(1e10), 5)))
+    print("7th root(2)     ", show(f.root(float_to_bits(2.0), 7)))
     print("status flags    ", f.status)

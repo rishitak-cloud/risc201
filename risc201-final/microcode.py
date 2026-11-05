@@ -1,64 +1,4 @@
-"""
-microcode.py - the control memory (Member C)
-
-This file is the DESIGN of the control unit (assignment item 1b).
-A microprogrammed processor has no hardwired control: every clock cycle
-it reads ONE microinstruction from control memory at address microPC,
-turns on the control signals written in it, and picks the next microPC.
-(Sarangi Chapter 8.)
-
-Run `python microcode.py` to print both control memories.
-microcpu.py EXECUTES programs from these ROMs (assignment item 3):
-`python cli.py examples/sum.s --mode horizontal` (or vertical).
-
-A microinstruction has two parts:
-  * control signals  - which register transfers happen this cycle
-  * sequencing       - how to get the next microPC
-
-Control signals (the datapath has registers A, B, ALU, MAR, MDR, IR, PC):
-
-  IR_FETCH   IR  <- MEM[PC]
-  DECODE     split IR into fields (rd, rs1, rs2, imm, offset)
-  A_RS1      A   <- R[rs1]
-  B_OPND     B   <- imm if I=1 else R[rs2]      (the immediate mux)
-  MDR_RD     MDR <- R[rd]                        (value to store)
-  ALU_OP     ALU <- A (op) B, op comes from the opcode
-  ALU_ADD    ALU <- A + B                        (ld / st address)
-  FLAGS_CMP  flags <- compare(A, B)
-  MAR_ALU    MAR <- ALU
-  MEM_READ   MDR <- MEM[MAR]
-  MEM_WRITE  MEM[MAR] <- MDR
-  RD_ALU     R[rd] <- ALU
-  RD_MDR     R[rd] <- MDR
-  RA_LINK    R[15] <- PC + 4
-  PC_INC     PC  <- PC + 4
-  PC_BRANCH  PC  <- PC + offset * 4
-  PC_RA      PC  <- R[15]
-  HALT       stop the machine
-
-Sequencing:
-  NEXT      microPC + 1
-  JUMP L    go to label L
-  DISPATCH  go to the routine for this opcode (the "mswitch" in Sarangi)
-  IF_E L    go to L if flags.E = 1, else NEXT
-  IF_GT L   go to L if flags.GT = 1, else NEXT
-  FETCH     back to microPC 0 (start the next instruction)
-
-HORIZONTAL vs VERTICAL
-  Horizontal: one bit per control signal. Many signals can be on in the
-              same microinstruction -> fewer micro-steps, WIDE words.
-  Vertical:   one ENCODED micro-operation per microinstruction; a small
-              decoder turns the code into a signal -> NARROW words,
-              more micro-steps per instruction.
-
-Rule inside one horizontal word: all signals happen at the same clock
-edge, so each one sees the values from the START of the cycle. So a word
-must not need a value that another signal of the same word produces
-(e.g. ALU_OP together with A_RS1 is illegal: the ALU would need the new A).
-The simulator applies signals in SIGNALS order; check_rom() makes sure no
-signal reads anything written by an earlier one, which gives exactly the
-hardware behaviour.
-"""
+import itertools
 import math
 
 SIGNALS = ['IR_FETCH', 'DECODE', 'A_RS1', 'B_OPND', 'MDR_RD', 'ALU_OP',
@@ -93,9 +33,94 @@ DISPATCH = {
     'nop': 'NOP', 'hlt': 'HLT',
     # floating point reuses the integer routines: only the ALU operation
     # differs, and ALU_OP takes the operation from the opcode
-    'fadd': 'ALU', 'fsub': 'ALU', 'fmul': 'ALU', 'fdiv': 'ALU',
-    'itof': 'MOVNOT', 'ftoi': 'MOVNOT', 'fcmp': 'CMP',
+    'fadd': 'ALU', 'fsub': 'ALU', 'fmul': 'ALU', 'fdiv': 'ALU', 'froot': 'ALU',
+    'itof': 'MOVNOT', 'ftoi': 'MOVNOT', 'fsqrt': 'MOVNOT', 'fcmp': 'CMP',
 }
+
+# ---------------------------------------------------------------------------
+# MIXED (field-encoded) microcode: which signals can share an encoded field?
+# ---------------------------------------------------------------------------
+def code_bits(n):
+    """Bits needed to name one of n signals, or 'none': n + 1 codes."""
+    return n.bit_length()
+
+
+def signal_conflicts(program=None):
+    """Two signals CONFLICT if some word of the horizontal microprogram turns
+    both on in the same cycle. Conflicting signals need separate fields;
+    signals that never fire together can share one field."""
+    program = HORIZONTAL if program is None else program
+    conflicts = {s: set() for s in SIGNALS}
+    for _, signals, _, _ in program:
+        for a, b in itertools.combinations(signals, 2):
+            conflicts[a].add(b)
+            conflicts[b].add(a)
+    return conflicts
+
+
+def _bit_budgets(total, parts, largest=None):
+    """All ways to split `total` bits into `parts` fields, biggest first."""
+    largest = total if largest is None else largest
+    if parts == 1:
+        if 1 <= total <= largest:
+            yield (total,)
+        return
+    for first in range(min(total - parts + 1, largest), 0, -1):
+        for rest in _bit_budgets(total - first, parts - 1, first):
+            yield (first,) + rest
+
+
+def _fit(order, conflicts, capacities):
+    """Try to put every signal in a field without breaking a conflict or a
+    field's capacity. Simple backtracking. Returns the fields or None."""
+    fields = [[] for _ in capacities]
+
+    def place(i):
+        if i == len(order):
+            return True
+        s = order[i]
+        for f, cap in zip(fields, capacities):
+            if len(f) < cap and not (conflicts[s] & set(f)):
+                f.append(s)
+                if place(i + 1):
+                    return True
+                f.pop()
+        return False
+
+    return fields if place(0) else None
+
+
+_FIELDS_CACHE = []
+
+
+def derive_fields():
+    """Find the encoded fields for the mixed style, AUTOMATICALLY.
+
+    Idea: try the smallest total number of signal bits first (1, 2, 3 ...).
+    A field of b bits can name 2**b - 1 signals (code 0 = 'no signal').
+    For every way of splitting that many bits into fields, check whether all
+    18 signals fit without two conflicting signals in one field. The first
+    split that works is the narrowest possible, so the ROM is as small as it
+    can be for this microprogram. Returns a list of fields (lists of signal
+    names)."""
+    if _FIELDS_CACHE:
+        return [list(f) for f in _FIELDS_CACHE[0]]
+    conflicts = signal_conflicts()
+    # hardest signals first: fails fast, finds a fit fast
+    order = sorted(SIGNALS, key=lambda s: (-len(conflicts[s]), SIGNALS.index(s)))
+    for total in range(1, len(SIGNALS) + 1):
+        for parts in range(1, total + 1):                 # fewer fields = fewer decoders
+            for budget in _bit_budgets(total, parts):
+                capacities = [(1 << b) - 1 for b in budget]
+                if sum(capacities) < len(SIGNALS):
+                    continue
+                fields = _fit(order, conflicts, capacities)
+                if fields:
+                    fields = [sorted(f, key=SIGNALS.index) for f in fields]
+                    _FIELDS_CACHE.append(fields)
+                    return [list(f) for f in fields]
+    raise ValueError("no field assignment found")          # cannot happen: 18 fields always work
+
 
 # ---------------------------------------------------------------------------
 # Microprograms, written as (label, [signals], sequencing, target label)
@@ -177,34 +202,52 @@ VERTICAL = [
 class ControlMemory:
     """Holds the ROM as integers plus what is needed to decode them."""
 
+    STYLES = ('horizontal', 'vertical', 'mixed')
+
     def __init__(self, style):
-        assert style in ('horizontal', 'vertical')
+        assert style in self.STYLES
         self.style = style
-        program = HORIZONTAL if style == 'horizontal' else VERTICAL
+        # mixed runs the horizontal microprogram, only the encoding differs
+        program = VERTICAL if style == 'vertical' else HORIZONTAL
         self.labels = {lab: i for i, (lab, _, _, _) in enumerate(program) if lab}
         self.dispatch = {op: self.labels[lab] for op, lab in DISPATCH.items()}
         self.source = program
 
         self.addr_bits = max(1, math.ceil(math.log2(len(program))))
         self.seq_bits = math.ceil(math.log2(len(SEQUENCES)))
+        self.fields = None                    # only for mixed
+        self.field_bits = None
         if style == 'horizontal':
             self.signal_bits = len(SIGNALS)                          # one bit each
+        elif style == 'vertical':
+            self.signal_bits = code_bits(len(SIGNALS))               # one code, 0 = none
         else:
-            self.signal_bits = math.ceil(math.log2(len(SIGNALS) + 1))  # code, 0 = none
+            self.fields = derive_fields()
+            self.field_bits = [code_bits(len(f)) for f in self.fields]
+            self.signal_bits = sum(self.field_bits)
         self.width = self.signal_bits + self.seq_bits + self.addr_bits
 
-        check_rom(program, style)
+        check_rom(program, style, self.fields)
         self.rom = [self.encode(sig, seq, self.labels.get(tgt, 0))
                     for (_, sig, seq, tgt) in program]
 
     # word layout:  | signals | sequencing | next address |
+    #   mixed:      | field 1 | field 2 | ... | sequencing | next address |
     def encode(self, signals, seq, target):
         if self.style == 'horizontal':
             field = 0
             for s in signals:
                 field |= 1 << (len(SIGNALS) - 1 - SIGNALS.index(s))
-        else:
+        elif self.style == 'vertical':
             field = SIGNALS.index(signals[0]) + 1 if signals else 0
+        else:
+            field = 0
+            for members, bits in zip(self.fields, self.field_bits):
+                code = 0                                    # 0 = this field is idle
+                for s in signals:
+                    if s in members:
+                        code = members.index(s) + 1
+                field = (field << bits) | code
         word = field
         word = (word << self.seq_bits) | SEQUENCES.index(seq)
         word = (word << self.addr_bits) | target
@@ -212,16 +255,46 @@ class ControlMemory:
 
     def decode(self, word):
         """Integer microinstruction -> (signals, sequencing, target).
-        For vertical this is the micro-operation DECODER."""
+        For vertical / mixed this is the micro-operation DECODER. A bit
+        pattern that names no signal / sequencing raises IndexError (the CPU
+        turns that into a MicrocodeFault)."""
         target = word & ((1 << self.addr_bits) - 1)
         seq = SEQUENCES[(word >> self.addr_bits) & ((1 << self.seq_bits) - 1)]
         field = word >> (self.addr_bits + self.seq_bits)
         if self.style == 'horizontal':
             signals = [s for i, s in enumerate(SIGNALS)
                        if field & (1 << (len(SIGNALS) - 1 - i))]
-        else:
+        elif self.style == 'vertical':
             signals = [SIGNALS[field - 1]] if field else []
+        else:
+            signals, shift = [], self.signal_bits
+            for members, bits in zip(self.fields, self.field_bits):
+                shift -= bits
+                code = (field >> shift) & ((1 << bits) - 1)
+                if code:
+                    signals.append(members[code - 1])       # IndexError if unused code
+            signals.sort(key=SIGNALS.index)                 # apply in SIGNALS order
         return signals, seq, target
+
+    def bit_meaning(self, bit):
+        """What does bit number `bit` (0 = least significant) of a word do?
+        Used by verify.py to explain injected faults."""
+        if bit < self.addr_bits:
+            return f"next-address bit {bit}"
+        if bit < self.addr_bits + self.seq_bits:
+            return f"sequencing bit {bit - self.addr_bits}"
+        p = bit - self.addr_bits - self.seq_bits            # 0 = lowest signal bit
+        if self.style == 'horizontal':
+            return f"signal {SIGNALS[len(SIGNALS) - 1 - p]}"
+        if self.style == 'vertical':
+            return f"micro-op code bit {p}"
+        low = 0                                             # last field sits lowest
+        for n in range(len(self.fields), 0, -1):
+            bits = self.field_bits[n - 1]
+            if p < low + bits:
+                return f"field {n} code bit {p - low}"
+            low += bits
+        return f"bit {bit}"
 
     def size_bits(self):
         return len(self.rom) * self.width
@@ -231,6 +304,12 @@ class ControlMemory:
         digits = (self.width + 3) // 4
         out = [f"{self.style} control memory: {len(self.rom)} words x {self.width} bits "
                f"= {self.size_bits()} bits"]
+        if self.fields:
+            out.append("  signal fields (signals that never fire together share a field):")
+            for n, (members, bits) in enumerate(zip(self.fields, self.field_bits), start=1):
+                out.append(f"    field {n}: {bits} bit{'s' if bits > 1 else ''}, "
+                           f"{len(members)} signal{'s' if len(members) > 1 else ''}: "
+                           f"{', '.join(members)}")
         for i, word in enumerate(self.rom):
             sig, seq, tgt = self.decode(word)
             nxt = seq if seq in ('NEXT', 'FETCH', 'DISPATCH') else \
@@ -240,7 +319,7 @@ class ControlMemory:
         return '\n'.join(out)
 
 
-def check_rom(program, style):
+def check_rom(program, style, fields=None):
     """Catch microcode mistakes before running anything."""
     labels = {lab for lab, _, _, _ in program if lab}
     for i, (lab, signals, seq, target) in enumerate(program):
@@ -253,6 +332,11 @@ def check_rom(program, style):
             raise ValueError(f"micro word {i}: jump to unknown label {target}")
         if style == 'vertical' and len(signals) > 1:
             raise ValueError(f"micro word {i}: vertical words hold one micro-op")
+        if fields:                       # mixed: one signal per field per word
+            for members in fields:
+                both = [x for x in signals if x in members]
+                if len(both) > 1:
+                    raise ValueError(f"micro word {i}: {both} share one encoded field")
         written = set()
         for s in sorted(signals, key=SIGNALS.index):
             if READS[s] & written:
@@ -267,6 +351,17 @@ def check_rom(program, style):
 
 
 if __name__ == '__main__':
-    for style in ('horizontal', 'vertical'):
-        print(ControlMemory(style).listing())
+    memories = [ControlMemory(style) for style in ControlMemory.STYLES]
+    for cm in memories:
+        print(cm.listing())
         print()
+    print("design space (same instructions, three ways to store the control):")
+    print(f"  {'style':11s} {'words':>5s} {'width':>6s} {'ROM bits':>9s}   decoder")
+    for cm in memories:
+        if cm.style == 'horizontal':
+            decoder = 'none'
+        elif cm.style == 'vertical':
+            decoder = f"1 x {cm.signal_bits}-bit"
+        else:
+            decoder = ' + '.join(f"{b}-bit" for b in cm.field_bits)
+        print(f"  {cm.style:11s} {len(cm.rom):5d} {cm.width:6d} {cm.size_bits():9d}   {decoder}")

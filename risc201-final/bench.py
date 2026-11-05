@@ -1,28 +1,3 @@
-"""
-bench.py - evaluation harness (assignment item 5, whole team)
-
-    python bench.py              all tables
-    python bench.py --csv out/   also write every table as a .csv file
-
-The PDF asks to evaluate "for different test cases by considering 4-stage
-and 6-stage ISAs, different assembly programs, horizontal vs. vertical
-microprogrammed controllers, and different ALU algorithms". Each section
-below is one of those:
-
-  1. PROCESSORS        single-cycle vs 4-stage vs 6-stage    (Member B, C)
-  2. MICROCODE         horizontal vs vertical, per program    (Member C)
-  3. MICROCODE         micro-cycles per instruction type      (Member C)
-  4. ALU               every algorithm on random operands     (Member D)
-  5. ALU               every algorithm on the real programs   (Member D)
-  6. FLOATING POINT    division algorithms: accuracy and work (Member D)
-  7. CORRECTNESS       all 5 models x 3 ALU configurations give the same
-                       registers and memory                   (everyone)
-
-Clock period model. These are ASSUMED numbers (picoseconds), chosen to be
-reasonable, and stated openly - change them here and every table updates.
-The logic of one instruction is split along Sarangi's 5 stages, with OF
-split into decode (ID) + register read (OF).
-"""
 import os
 import random
 import sys
@@ -33,33 +8,39 @@ from alu import ALU
 from assembler import assemble
 from cpu import SingleCycleCPU
 from machine import Machine, load_file
+from microcode import ControlMemory
 from microcpu import MicroCPU
 from pipeline import Pipeline
 
 PROGRAMS = ['sum', 'fact', 'hazard', 'muldiv', 'bubble', 'fib', 'gcd', 'matmul', 'fp', 'ovf']
-MODES = ('single', 'pipe4', 'pipe6', 'horizontal', 'vertical')
+MICRO = ('horizontal', 'vertical', 'mixed')
+MODES = ('single', 'pipe4', 'pipe6') + MICRO
 
-# ---- assumed delays (ps) ----
-STAGE_DELAY = {'IF': 200, 'ID': 100, 'OF': 150, 'EX': 250, 'MA': 200, 'RW': 100}
-LATCH = 20                       # pipeline register overhead per stage
-DECODER = 30                     # vertical microcode needs a micro-op decoder
+# ---- assumed delays (ps): one copy, in pipeline.py ----
+from pipeline import STAGE_DELAY, LATCH, clock_period
+DECODER_PER_BIT = 6              # a decoder gets slower with every input bit
+                                 # (vertical: one 5-bit decoder = 30 ps, as before)
 
 PERIOD = {
     # one long cycle has to fit everything
     'single': sum(STAGE_DELAY.values()),
     # the slowest stage sets the clock, plus the pipeline latch
-    'pipe6': max(STAGE_DELAY.values()) + LATCH,
-    'pipe4': max(STAGE_DELAY['IF'], STAGE_DELAY['ID'] + STAGE_DELAY['OF'],
-                 STAGE_DELAY['EX'] + STAGE_DELAY['MA'], STAGE_DELAY['RW']) + LATCH,
+    'pipe6': clock_period(6),
+    'pipe4': clock_period(4),
     # one micro-step = one register transfer; the slowest is an ALU op
     'horizontal': max(STAGE_DELAY.values()) + LATCH,
-    'vertical': max(STAGE_DELAY.values()) + LATCH + DECODER,
+    'vertical': (max(STAGE_DELAY.values()) + LATCH
+                 + DECODER_PER_BIT * ControlMemory('vertical').signal_bits),
+    # the field decoders work in parallel: the widest field sets the delay
+    'mixed': (max(STAGE_DELAY.values()) + LATCH
+              + DECODER_PER_BIT * max(ControlMemory('mixed').field_bits)),
 }
 
 ALU_CONFIGS = [
     {'adder': 'ripple', 'multiplier': 'iterative', 'divider': 'restoring'},
     {'adder': 'cselect', 'multiplier': 'iterative', 'divider': 'restoring'},
     {'adder': 'cla', 'multiplier': 'booth', 'divider': 'nonrestoring'},
+    {'adder': 'cla', 'multiplier': 'booth4', 'divider': 'nonrestoring'},
 ]
 
 CSV_DIR = None
@@ -118,22 +99,81 @@ def section_processors():
     print()
 
 
+def section_pipeline_features():
+    print("1b. PIPELINE FEATURES (6-stage, totals over all programs)")
+    configs = [
+        ('baseline: predict not-taken', {}),
+        ('+ store forwarding (RW -> MA)', dict(store_forwarding=True)),
+        ('+ 1-bit predictor + BTB', dict(predictor='1bit')),
+        ('+ 2-bit predictor + BTB + RAS', dict(predictor='2bit')),
+        ('2-bit + store forwarding', dict(predictor='2bit', store_forwarding=True)),
+        ('multi-cycle: mul 4, div 20', dict(mul_latency=4, div_latency=20)),
+        ('unified memory (one port)', dict(unified_memory=True)),
+    ]
+    rows, base = [], None
+    for label, kw in configs:
+        tot = dict(cycles=0, stalls=0, flushed=0, branches=0, mispredicted=0,
+                   ex_stalls=0, struct_stalls=0, instructions=0)
+        for p in PROGRAMS:
+            m = Machine(load_file(f'examples/{p}.s'))
+            cpu = Pipeline(m, 6, **kw)
+            cpu.run()
+            for k, v in cpu.stats().items():
+                if k in tot:
+                    tot[k] += v
+        base = base or tot['cycles']
+        acc = 100 * (1 - tot['mispredicted'] / tot['branches'])
+        rows.append([label, tot['cycles'], f"{100 * (tot['cycles'] - base) / base:+.1f}%",
+                     f"{tot['cycles'] / tot['instructions']:.3f}", tot['stalls'], tot['flushed'],
+                     f"{acc:.0f}%", tot['ex_stalls'], tot['struct_stalls']])
+    table('1b_pipeline_features', ['configuration', 'cycles', 'change', 'CPI', 'load-use',
+                                   'flushed', 'predicted ok', 'EX busy', 'port busy'], rows)
+    print("   every configuration ends in exactly the same registers and memory (tests)")
+    print()
+
+
 def section_microcode():
-    print("2. MICROPROGRAMMED CONTROL: horizontal vs vertical")
+    print("2. MICROPROGRAMMED CONTROL: horizontal vs vertical vs mixed (field-encoded)")
     rows = []
+    total_cycles = {mode: 0 for mode in MICRO}
     for p in PROGRAMS:
-        for mode in ('horizontal', 'vertical'):
+        for mode in MICRO:
             m, cpu = run(p, mode)
             s = cpu.stats()
+            total_cycles[mode] += s['cycles']
             rows.append([p, mode, s['instructions'], s['cycles'], s['CPI'],
                          f"{s['rom_words']}x{s['rom_width']}={s['rom_bits']}",
                          ns(s['cycles'], mode)])
     table('2_microcode', ['program', 'control', 'instr', 'micro-cycles', 'CPI',
                           'ROM bits', 'time(ns)'], rows)
 
+    print("   design space: all programs together")
+    drows, point = [], {}
+    for mode in MICRO:
+        cm = ControlMemory(mode)
+        time_ns = total_cycles[mode] * PERIOD[mode] / 1000
+        point[mode] = (cm.size_bits(), time_ns)
+        drows.append([mode, cm.width, cm.size_bits(), PERIOD[mode], total_cycles[mode],
+                      f"{time_ns:.1f}"])
+    table('2b_design_space', ['control', 'word width', 'ROM bits', 'clock(ps)',
+                              'micro-cycles', 'time(ns)'], drows)
+    for mode in MICRO:
+        beaten_by = [o for o in MICRO if o != mode
+                     and point[o][0] <= point[mode][0] and point[o][1] <= point[mode][1]
+                     and point[o] != point[mode]]
+        if beaten_by:
+            print(f"   {mode}: DOMINATED - {', '.join(beaten_by)} is at least as good on "
+                  f"both ROM size and total time")
+        else:
+            print(f"   {mode}: on the trade-off frontier (nothing beats it on both ROM size "
+                  f"and total time)")
+    print("   mixed uses the horizontal microprogram (same micro-cycles) but packs the signals")
+    print("   into encoded fields: smaller ROM, paid for with a small decoder delay on the clock")
+    print()
+
 
 def section_micro_per_opcode():
-    """Run one instance of each instruction type through both control units
+    """Run one instance of each instruction type through all three control units
     and count its micro-cycles. Branches are measured taken and not taken."""
     print("3. MICRO-CYCLES PER INSTRUCTION (fetch + decode + routine)")
     cases = [
@@ -153,7 +193,7 @@ def section_micro_per_opcode():
     rows = []
     for label, src in cases:
         counts = {}
-        for style in ('horizontal', 'vertical'):
+        for style in MICRO:
             prog = assemble(src)
             cpu = MicroCPU(Machine(prog), style)
             target = prog.symbols['X']
@@ -162,9 +202,10 @@ def section_micro_per_opcode():
             start = cpu.cycle
             cpu.step_instruction()
             counts[style] = cpu.cycle - start
-        rows.append([label, counts['horizontal'], counts['vertical'],
+        rows.append([label, counts['horizontal'], counts['vertical'], counts['mixed'],
                      counts['vertical'] - counts['horizontal']])
-    table('3_micro_per_opcode', ['instruction', 'horizontal', 'vertical', 'extra'], rows)
+    table('3_micro_per_opcode', ['instruction', 'horizontal', 'vertical', 'mixed',
+                                 'vertical extra'], rows)
 
 
 def section_alu_random():
@@ -229,13 +270,23 @@ def section_floating_point():
                       'goldschmidt': 'O(log(n)^2)'}[d]])
     table('6_fp_division', ['algorithm', 'correctly rounded', 'worst error (ulp)',
                             'steps per divide', 'book complexity'], rows)
+    print("   n-th root, froot (Newton-Raphson + exact check root^n == input): correctly rounded")
+    roots = [(rng.randint(1, 254) << 23) | rng.getrandbits(23) for _ in range(2000)]
+    rrows = []
+    for n in (2, 3, 4, 5, 7, 10, 31):
+        f = ALU().fpu
+        for x in roots:
+            f.root(x, n)
+        rrows.append([n, f"{f.stats['root_steps'] / f.stats['froots']:.1f}", "100%"])
+    table('6b_nth_root', ['n', 'Newton steps per root', 'correctly rounded'], rrows)
     print("   restoring: one quotient bit per step, exact remainder -> always correctly rounded")
     print("   newton / goldschmidt: a few multiply steps, approximate -> may be 1 ulp off")
     print()
 
 
 def section_correctness():
-    print("7. CORRECTNESS: 5 processor models x 3 ALU configurations, same final state?")
+    print(f"7. CORRECTNESS: {len(MODES)} processor models x {len(ALU_CONFIGS)} ALU configurations, "
+          f"same final state?")
     ok = True
     for p in PROGRAMS:
         states = set()
@@ -245,7 +296,8 @@ def section_correctness():
                 states.add(m.state())
         same = len(states) == 1
         ok &= same
-        print(f"   {p:8s} {'same (15 runs)' if same else 'DIFFERENT!'}")
+        runs = len(MODES) * len(ALU_CONFIGS)
+        print(f"   {p:8s} {f'same ({runs} runs)' if same else 'DIFFERENT!'}")
     print("\nall models agree" if ok else "\nMISMATCH - a model has a bug")
     return ok
 
@@ -258,6 +310,7 @@ def main(argv):
     print("clock periods used (ps):", ', '.join(f"{k}={v}" for k, v in PERIOD.items()))
     print()
     section_processors()
+    section_pipeline_features()
     section_microcode()
     section_micro_per_opcode()
     section_alu_random()

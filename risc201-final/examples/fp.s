@@ -4,7 +4,10 @@
 @           r4 = 0          so fcmp finds r3 != 1.0
 @           r6 = 5          ftoi(16 / 3.0) = ftoi(5.333) = 5
 @           r7 = inf        1e38 x 10 overflows -> FPU overflow flag
-@ Shows: lif (load float constant), fmul, fadd, fdiv, fcmp, itof, ftoi,
+@           r8 = 5.0        sqrt(3^2 + 4^2), the hypotenuse
+@           r10 = -3.0      cube root of -27 (odd roots of negatives exist)
+@           r11 = 1.5       4th root of 5.0625
+@ Shows: lif (load float constant), fmul, fadd, fdiv, fcmp, itof, ftoi, fsqrt, froot,
 @ rounding error, overflow to infinity.
 
         lif  r1, 3.1415927
@@ -34,4 +37,15 @@ same:   mov  r5, 3              @ average of 3, 5, 8 ...
         lif  r7, 1e38
         lif  r2, 10.0
         fmul r7, r7, r2         @ too big for a float -> +inf
+        lif  r8, 3.0
+        lif  r9, 4.0
+        fmul r8, r8, r8         @ 9
+        fmul r9, r9, r9         @ 16
+        fadd r8, r8, r9         @ 25
+        fsqrt r8, r8            @ 5
+        lif  r10, -27.0
+        froot r10, r10, 3       @ cube root: -3
+        lif  r11, 5.0625
+        mov  r12, 4
+        froot r11, r11, r12     @ n can come from a register too: 1.5
         hlt

@@ -1,7 +1,3 @@
-"""
-tests/test_all.py - run with:  python tests/test_all.py
-(no extra libraries needed; every test is a plain function with asserts)
-"""
 import os
 import random
 import sys
@@ -17,7 +13,7 @@ from disassembler import disassemble, read_words
 from exceptions import (StackOverflow, StackUnderflow, ProtectionFault, DivideByZero,
                         StackAccessViolation, IllegalInstruction)
 from machine import Machine, load_file
-from microcode import check_rom
+from microcode import check_rom, ControlMemory, SIGNALS, HORIZONTAL
 from pipeline import Pipeline
 from cpu import SingleCycleCPU
 from microcpu import MicroCPU
@@ -25,7 +21,7 @@ from exceptions import MicrocodeFault, ArithmeticOverflow
 import fpu
 from preprocessor import expand_macros
 
-MODES = ('single', 'pipe4', 'pipe6', 'horizontal', 'vertical')
+MODES = ('single', 'pipe4', 'pipe6', 'horizontal', 'vertical', 'mixed')
 EXAMPLES = ['sum', 'fact', 'hazard', 'muldiv', 'bubble', 'fib', 'gcd', 'matmul', 'fp', 'ovf']
 
 
@@ -115,7 +111,7 @@ def test_alu_algorithms():
 
 
 # ---------------------------------------------------------------- processors
-EXPECTED = {'fp': {4: 0, 6: 5}, 'ovf': {2: -2**31},
+EXPECTED = {'fp': {4: 0, 6: 5, 8: 0x40A00000, 10: isa.to_signed(0xC0400000), 11: 0x3FC00000}, 'ovf': {2: -2**31},
             'fib': {1: 6765}, 'gcd': {1: 21}, 'matmul': {10: -14, 11: -54},
             'sum': {1: 55}, 'fact': {1: 720}, 'hazard': {5: 40},
             'muldiv': {3: -42, 4: -3, 5: -1, 7: -2}, 'bubble': {9: -15, 10: 99}}
@@ -166,7 +162,7 @@ def test_exceptions():
     expect(StackAccessViolation, "ld r1, -4[sp]\nhlt")          # below sp
     expect(StackUnderflow, "pop {r1}\nhlt")                      # empty stack
     expect(ProtectionFault, "mov r1, 0\nst r1, 0[r1]\nhlt")       # write into code
-    expect(IllegalInstruction, ".word 0xE0000000\nhlt")           # opcode 11100 (unused)
+    expect(IllegalInstruction, ".word 0xF0000000\nhlt")           # opcode 11110 (unused)
 
 
 def test_wrong_path_fetch_is_harmless():
@@ -193,7 +189,7 @@ def test_microcode_checker():
 def test_microcode_runs_from_rom():
     """Item 3: the microprogrammed CPU executes from control memory and
     visits microPC 0 (FETCH) once per instruction."""
-    for style in ('horizontal', 'vertical'):
+    for style in ('horizontal', 'vertical', 'mixed'):
         m = Machine(load_file('examples/sum.s'))
         cpu = MicroCPU(m, style)
         fetches = 0
@@ -221,6 +217,88 @@ def test_microcode_fault():
     except MicrocodeFault:
         return
     raise AssertionError("expected MicrocodeFault")
+
+
+# ---------------------------------------------------------------- Member C extras
+def test_every_rom_word_round_trips():
+    """encode -> ROM integer -> decode gives back the microprogram, for all 3 styles."""
+    for style in ControlMemory.STYLES:
+        cm = ControlMemory(style)
+        for word, (_, signals, seq, target) in zip(cm.rom, cm.source):
+            assert cm.decode(word) == (sorted(signals, key=SIGNALS.index), seq,
+                                       cm.labels.get(target, 0)), (style, hex(word))
+
+
+def test_mixed_fields_are_legal():
+    """Every signal is in exactly one field, and no horizontal word turns on
+    two signals of the same field (otherwise the packing would lose information)."""
+    cm = ControlMemory('mixed')
+    assert sorted(s for f in cm.fields for s in f) == sorted(SIGNALS)
+    for _, signals, _, _ in HORIZONTAL:
+        for members in cm.fields:
+            assert len([s for s in signals if s in members]) <= 1, (signals, members)
+
+
+def test_mixed_is_the_middle_road():
+    """Same micro-cycles as horizontal, ROM smaller than both horizontal and vertical."""
+    h, v, x = (ControlMemory(s) for s in ('horizontal', 'vertical', 'mixed'))
+    assert x.size_bits() < h.size_bits() and x.size_bits() < v.size_bits()
+    assert x.width < h.width
+    cycles = {}
+    for style in ControlMemory.STYLES:
+        cpu = MicroCPU(Machine(load_file('examples/fact.s')), style)
+        cpu.run()
+        cycles[style] = cpu.cycle
+    assert cycles['mixed'] == cycles['horizontal'] < cycles['vertical']
+
+
+def test_microcode_profile_counts():
+    """The profiler counts every micro-cycle exactly once."""
+    cpu = MicroCPU(Machine(load_file('examples/sum.s')), 'mixed')
+    cpu.run()
+    assert sum(cpu.upc_hits) == cpu.cycle
+    assert cpu.upc_hits[0] == cpu.retired
+    assert sum(cpu.opcode_hits.values()) == cpu.retired
+    assert 'never executed' in cpu.profile_report() or 'control memory used' in cpu.profile_report()
+
+
+def test_invalid_microinstruction_is_a_fault():
+    """A control word whose bits name no signal raises MicrocodeFault, not a Python error."""
+    cpu = MicroCPU(Machine(load_file('examples/sum.s')), 'vertical')
+    cpu.cm.rom[0] |= 0b11111 << (cpu.cm.addr_bits + cpu.cm.seq_bits)    # micro-op code 31
+    try:
+        cpu.micro_step()
+    except MicrocodeFault:
+        return
+    raise AssertionError("expected MicrocodeFault")
+
+
+def test_verifier_passes_and_catches_injected_bugs():
+    import verify
+    prog = load_file('examples/sum.s')
+    for style in verify.STYLES:
+        assert verify.lockstep(prog, style)['ok'], style
+    damaged = verify.lockstep(prog, 'horizontal', flips=[(3, 20)])      # switch ALU_OP off
+    assert not damaged['ok']
+
+
+def test_debugger_mode_switch():
+    import contextlib
+    import io
+    import cli
+    opts = {'adder': 'cla', 'multiplier': 'booth', 'divider': 'nonrestoring'}
+    dbg = cli.Debugger('examples/sum.s', 'single', opts, True)
+    with contextlib.redirect_stdout(io.StringIO()):
+        for name in ('horizontal', 'vertical', 'mixed', 'pipe6', 'single'):
+            dbg.do_mode(name)
+            assert dbg.mode == name
+            dbg.do_continue('')
+            assert dbg.cpu.halted
+            assert isa.to_signed(dbg.machine.regs.values[1]) == 55, name
+        dbg.do_mode('nonsense')                       # rejected, nothing changes
+        dbg.do_mode('vertical')
+        dbg.do_uprof('')                              # profile works in a micro mode
+    assert dbg.mode == 'vertical'
 
 
 # ---------------------------------------------------------------- overflow
@@ -323,6 +401,166 @@ def test_float_constants_and_macros():
     assert prog.words[-1] == fpu.float_to_bits(3.25)
 
 
+# ---------------------------------------------------------------- Member D extras
+def test_booth4_halves_the_steps():
+    a2, a4 = ALU(multiplier='booth'), ALU(multiplier='booth4')
+    rng = random.Random(4)
+    for _ in range(500):
+        x, y = rng.getrandbits(32), rng.getrandbits(32)
+        assert a4.mul(x, y) == (x * y) & isa.MASK32
+        a2.mul(x, y)
+    assert a4.stats['mul_addsub'] <= 16 * 500
+    assert a4.stats['mul_addsub'] < a2.stats['mul_addsub']
+
+
+def test_fsqrt():
+    f = ALU().fpu
+    b = fpu.float_to_bits
+    assert f.sqrt(b(25.0)) == b(5.0)
+    assert f.sqrt(b(2.0)) == b(1.4142135381698608)
+    assert fpu.is_nan(f.sqrt(b(-1.0))) and f.status['invalid']
+    assert f.sqrt(0x80000000) == 0x80000000             # sqrt(-0) = -0
+    try:
+        import numpy as np
+    except ImportError:
+        return
+    rng = random.Random(5)
+    for _ in range(3000):
+        x = rng.getrandbits(31)                         # positive, incl. denormals
+        ref = int(np.sqrt(np.array([x], np.uint32).view(np.float32)).view(np.uint32)[0])
+        got = f.sqrt(x)
+        assert (fpu.is_nan(got) and fpu.is_nan(ref)) or got == ref, hex(x)
+
+
+def test_nth_root_correctly_rounded():
+    """froot is correctly rounded for any n: checked with exact fractions,
+    x must lie strictly between the n-th powers of the two midpoints around
+    the result."""
+    from fractions import Fraction
+    f = ALU().fpu
+    rng = random.Random(29)
+    for n in (2, 3, 4, 5, 7, 12):
+        for _ in range(300):
+            x = (rng.randint(1, 254) << 23) | rng.getrandbits(23)
+            if n % 2 and rng.random() < 0.3:
+                x |= 1 << 31                             # odd roots of negatives
+            r = f.root(x, n)
+            assert (r >> 31) == ((x >> 31) if n % 2 else 0)
+            m = r & 0x7FFFFFFF
+            v = fpu.exact_value(m)
+            lo = (fpu.exact_value(m - 1) + v) / 2
+            hi = (v + fpu.exact_value(m + 1)) / 2
+            assert lo ** n < abs(fpu.exact_value(x)) < hi ** n, (n, hex(x), hex(r))
+
+
+def test_nth_root_special_cases():
+    f = ALU().fpu
+    b = fpu.float_to_bits
+    assert f.root(b(-8.0), 3) == b(-2.0)
+    assert f.root(b(1e10), 5) == b(100.0)
+    assert fpu.is_nan(f.root(b(-16.0), 4))               # no real even root
+    assert fpu.is_nan(f.root(b(2.0), 0))                 # n must be 1..255
+    assert f.root(b(7.5), 1) == b(7.5)
+    assert f.root(0x80000000, 3) == 0x80000000           # rootn(-0, odd) = -0
+    assert f.root(0x80000000, 2) == 0                    # rootn(-0, even) = +0
+    assert f.sqrt(0x80000000) == 0x80000000              # ... but sqrt(-0) = -0
+    for x in range(1, 4000, 7):                          # froot(x, 2) == fsqrt(x)
+        bits = (x * 997) & 0x7FFFFFFF
+        if not fpu.is_nan(bits):
+            assert f.root(bits, 2) == f.sqrt(bits)
+
+
+# ---------------------------------------------------------------- Member B extras
+def _run_pipe(src_or_file, depth=6, **opts):
+    src = open(src_or_file).read() if src_or_file.endswith('.s') else src_or_file
+    m = Machine(assemble(src))
+    p = Pipeline(m, depth, **opts)
+    p.run()
+    return m, p
+
+
+def test_pipeline_features_never_change_results():
+    """Every option combination ends in exactly the single-cycle CPU's state."""
+    import itertools
+    for name in ('sum', 'fact', 'bubble', 'matmul', 'fp'):
+        ref = Machine(load_file(f'examples/{name}.s'))
+        SingleCycleCPU(ref).run()
+        for depth, pred, sf, lat, um in itertools.product(
+                (4, 6), ('none', '1bit', '2bit'), (False, True), (1, 5), (False, True)):
+            m, _ = _run_pipe(f'examples/{name}.s', depth, predictor=pred, store_forwarding=sf,
+                             mul_latency=lat, div_latency=lat * 4, unified_memory=um)
+            assert m.state() == ref.state(), (name, depth, pred, sf, lat, um)
+
+
+def test_branch_prediction_cuts_flushes():
+    _, static = _run_pipe('examples/sum.s')
+    _, one = _run_pipe('examples/sum.s', predictor='1bit')
+    _, two = _run_pipe('examples/sum.s', predictor='2bit')
+    assert two.mispredicted <= one.mispredicted < static.mispredicted
+    assert two.cycle < static.cycle
+
+
+def test_return_address_stack():
+    """fact.s returns 6 times; the RAS predicts them, so 2-bit + RAS
+    mispredicts far less than static prediction."""
+    _, static = _run_pipe('examples/fact.s')
+    _, ras = _run_pipe('examples/fact.s', predictor='2bit')
+    assert ras.mispredicted < static.mispredicted / 2
+
+
+def test_store_forwarding_removes_ld_st_stall():
+    src = "mov r2, d\nnop\nnop\nld r1, 0[r2]\nst r1, 4[r2]\nhlt\nd: .word 7, 0"
+    src = src.replace("d: .word 7, 0", "d: .word 7\n.space 4")
+    src = "movu r2, 0x1000\nmov r1, 7\nst r1, 0[r2]\nnop\nld r1, 0[r2]\nst r1, 4[r2]\nhlt"
+    m0, p0 = _run_pipe(src)
+    m1, p1 = _run_pipe(src, store_forwarding=True)
+    assert p0.stalls == 1 and p1.stalls == 0
+    assert m1.mem.peek(0x1004) == 7
+
+
+def test_multicycle_units():
+    src = "mov r1, 3\nmov r2, 4\nmul r3, r1, r2\nadd r4, r3, 1\nhlt"
+    m, p = _run_pipe(src, mul_latency=4)
+    assert p.ex_stalls == 3 and m.regs.values[4] == 13
+
+
+def test_unified_memory_structural_hazard():
+    _, harvard = _run_pipe('examples/bubble.s')
+    _, vonneumann = _run_pipe('examples/bubble.s', unified_memory=True)
+    assert vonneumann.struct_stalls > 0 and vonneumann.cycle > harvard.cycle
+    # in sum.s every load already causes a load-use stall, and IF does not
+    # fetch during it - so the port conflict hides inside that bubble
+    _, h, = _run_pipe('examples/sum.s')
+    _, v = _run_pipe('examples/sum.s', unified_memory=True)
+    assert v.struct_stalls == 0 and v.cycle == h.cycle
+
+
+def test_precise_exceptions():
+    """An older instruction always completes; a younger one never has an effect."""
+    older_completes = "mov r2, d\nmov r4, 7\nnop\nnop\nld r1, 0[r2]\ndiv r3, r4, r0\nhlt\nd: .word 42"
+    younger_no_effect = "sub sp, sp, 8192\ncmp r5, r5\nhlt"
+    from exceptions import RiscError
+    for depth in (4, 6):
+        for src, check in ((older_completes, lambda m: m.regs.values[1] == 42),
+                           (younger_no_effect, lambda m: m.flags.E == 0)):
+            m = Machine(assemble(src))
+            try:
+                Pipeline(m, depth).run()
+            except RiscError:
+                assert check(m), (depth, src.splitlines()[-2])
+                continue
+            raise AssertionError("expected an exception")
+
+
+def test_iron_law_stats():
+    _, p4 = _run_pipe('examples/bubble.s', 4)
+    _, p6 = _run_pipe('examples/bubble.s', 6)
+    s4, s6 = p4.stats(), p6.stats()
+    assert s4['CPI'] < s6['CPI']                      # 4-stage: fewer cycles ...
+    assert s6['time_ns'] < s4['time_ns']              # ... but 6-stage finishes first
+    assert s6['MIPS'] > s4['MIPS']
+
+
 if __name__ == '__main__':
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith('test_')]
     failed = 0
@@ -334,5 +572,11 @@ if __name__ == '__main__':
             failed += 1
             print(f"FAIL  {name}: {type(e).__name__}: {e}")
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
+    import unittest
+    import test_toolchain
+    print("\ntoolchain suite (tests/test_toolchain.py):")
+    result = unittest.TextTestRunner(verbosity=0).run(
+        unittest.defaultTestLoader.loadTestsFromModule(test_toolchain))
+    failed += len(result.failures) + len(result.errors)
     sys.exit(1 if failed else 0)
 

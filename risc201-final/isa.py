@@ -1,40 +1,5 @@
-"""
-isa.py - the RISC201 instruction set (Member A)
-
-RISC201 follows SimpleRisc from Sarangi, "Computer Organisation and
-Architecture", Chapter 3. Everything else in the project imports its
-encodings from here, so this file is the single place to change if the
-professor's RISC201 differs from the book.
-
-Machine facts
-  * 16 registers r0..r15, 32 bits each. r14 = sp, r15 = ra.
-  * flags register with two bits: E (equal) and GT (greater than),
-    written only by cmp / fcmp, read only by beq / bgt.
-    Our extension: a third bit V (signed overflow), set by add, sub, mul,
-    div. It is shown in the debugger; with --trap-overflow, overflow
-    raises an exception instead.
-  * Floating point (our extension): fadd fsub fmul fdiv fcmp itof ftoi
-    work on IEEE 754 single-precision bit patterns held in the normal
-    registers. With the 'h' modifier the immediate becomes the top half of
-    a float: fmulh r1, r1, 0x4000 multiplies by 2.0.
-  * every instruction is 32 bits, memory is byte addressed,
-    ld / st move one 32-bit word.
-
-Instruction word (bit 31 on the left)
-
-  Register format   | opcode(5) | I=0 | rd(4) | rs1(4) | rs2(4) | unused(14) |
-  Immediate format  | opcode(5) | I=1 | rd(4) | rs1(4) | mod(2) | imm(16)    |
-  Branch format     | opcode(5) |          offset (27 bits, in words)        |
-
-  mod = 00 default: imm is sign-extended          (add  r1, r2, -5)
-        01 'u'    : imm is zero-extended          (addu r1, r2, 0xFFFF)
-        10 'h'    : imm goes to the upper 16 bits (movh r1, 0x1234)
-
-  Branch target = PC of the branch + offset * 4
-"""
-
 # ----------------------------------------------------------------------------
-# Opcodes (5 bits). Numbers follow the order of Sarangi's instruction table.
+# Opcodes (5 bits). Numbers follow the order of the textbook's instruction table.
 # ----------------------------------------------------------------------------
 OPCODES = {
     'add': 0b00000, 'sub': 0b00001, 'mul': 0b00010, 'div': 0b00011,
@@ -49,14 +14,16 @@ OPCODES = {
     'fcmp': 0b11001,  # sets E / GT like cmp
     'itof': 0b11010,  # int -> float
     'ftoi': 0b11011,  # float -> int, rounds towards zero
+    'fsqrt': 0b11100, # square root (Newton-Raphson, correctly rounded)
+    'froot': 0b11101, # n-th root: froot rd, rs1, n   (n = 1..255, correctly rounded)
     'hlt': 0b11111,   # stop the simulator
 }
 NAMES = {code: name for name, code in OPCODES.items()}
 
 # Groups decide the operand syntax and the encoding format
 THREE_ADDR = {'add', 'sub', 'mul', 'div', 'mod', 'and', 'or', 'lsl', 'lsr', 'asr',
-              'fadd', 'fsub', 'fmul', 'fdiv'}
-TWO_ADDR   = {'not', 'mov', 'itof', 'ftoi'}   # rd, rs2/imm
+              'fadd', 'fsub', 'fmul', 'fdiv', 'froot'}
+TWO_ADDR   = {'not', 'mov', 'itof', 'ftoi', 'fsqrt'}   # rd, rs2/imm
 COMPARE    = {'cmp', 'fcmp'}         # rs1, rs2/imm
 MEMORY     = {'ld', 'st'}            # rd, imm[rs1]
 BRANCH     = {'beq', 'bgt', 'b', 'call'}
@@ -133,6 +100,8 @@ def decode(word):
         'offset': to_signed(word & 0x7FFFFFF, 27),
     }
     d['imm'] = expand_immediate(d['imm16'], d['mod'])
+    if d['name'] in ALU_TYPE and d['I'] and d['mod'] == 0b11:
+        d['name'] = None          # modifier 11 is reserved: not a valid instruction
     return d
 
 

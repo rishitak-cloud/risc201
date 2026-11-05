@@ -1,26 +1,3 @@
-"""
-cpu.py - single-cycle CPU execution simulator (Member C)
-
-The simplest possible processor: one call to step() runs ONE whole
-instruction, start to finish, before the next one begins. No pipeline,
-no overlap, no hazards. (Sarangi Chapter 8: the single-cycle processor
-before pipelining.)
-
-Every step does the same five things, in order:
-
-    1. FETCH       word = memory[PC]
-    2. DECODE      split the word into fields (isa.decode)
-    3. EXECUTE     read registers, run the ALU / compare / branch decision
-    4. MEMORY      ld reads memory, st writes memory
-    5. WRITE BACK  put the result in rd; set the next PC
-
-Because nothing overlaps, this model is easy to trust. The other models
-(4/6-stage pipelines, microprogrammed CPU) must end in exactly the same
-state as this one - only their timing is different.
-
-For the debugger, every step remembers what it changed (self.last), so
-`step` can print e.g.   0x000c  ld r4, 0[r2]   r4: 0 -> 1
-"""
 import isa
 from exceptions import MemoryFault, IllegalInstruction
 

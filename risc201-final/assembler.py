@@ -1,30 +1,3 @@
-"""
-assembler.py - two-pass assembler for RISC201 (Member A)
-
-Pass 1: walk the program, give every instruction / data word an address,
-        and record where every label is (the symbol table).
-Pass 2: walk it again and turn each line into a 32-bit word. Now every
-        label is known, so forward references (branching to a label that
-        is defined later) work.
-
-Syntax
-    label:  add  r1, r2, r3        @ comment  (also ; and //)
-            addu r1, r2, 0xFFFF    @ u = unsigned immediate
-            movh r1, 0x1234        @ h = immediate into upper half
-            ld   r1, 8[sp]         @ memory operand is imm[reg]
-            mov  r2, array         @ a label can be used as an immediate
-            push {r2, ra}          @ macro, see preprocessor.py
-            .word 1, 2, 0x10       @ raw data words
-            .space 16              @ 16 zero bytes
-            .float 3.14, -0.5      @ IEEE 754 single-precision words
-            li   r1, 0x12345678    @ macro: any 32-bit constant
-            lif  r1, 2.5           @ macro: any float constant
-
-Usage
-    python assembler.py prog.s              -> prog.hex
-    python assembler.py prog.s --bin        -> prog.bin
-    python assembler.py prog.s -l prog.lst  -> also write a listing
-"""
 import sys
 import isa
 from preprocessor import expand_macros, MacroError
@@ -272,7 +245,7 @@ def to_listing(prog):
 
 def main(argv):
     if not argv:
-        print(__doc__)
+        print("usage: python assembler.py program.s [-o out.hex] [--bin] [-l listing.lst]")
         return 1
     src = argv[0]
     out = None

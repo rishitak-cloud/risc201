@@ -1,32 +1,3 @@
-"""
-machine.py - the architectural state that every processor model shares
-(Member B; the stack guard inside it is item 2f)
-
-    Machine
-      .regs    RegisterFile   16 x 32-bit, writes to sp are checked
-      .flags   Flags          E and GT
-      .mem     Memory         64 KB, word access, protection checks
-      .alu     ALU
-      .frames  list           one entry per active call (for the stack view)
-
-Memory map (byte addresses)
-
-    0x0000 ............ code_end    program (write protected)
-    code_end .......... 0xF000      free / data
-    0xF000 ............ 0x10000     stack, 4 KB
-                        ^ stack limit    ^ stack base (sp starts here)
-
-Stack safety rules (checked when guard=True)
-    1. writing sp below STACK_LIMIT            -> StackOverflow
-    2. writing sp above STACK_BASE             -> StackUnderflow
-    3. sp not a multiple of 4                  -> AlignmentFault
-    4. ld/st into the stack BELOW sp           -> StackAccessViolation
-       ld/st just ABOVE the stack base         -> StackUnderflow (pop on empty stack)
-       (that memory is not allocated yet; full-descending means the
-        valid stack is sp .. base)
-    5. ret to an address outside the code      -> ProtectionFault
-       (catches a saved ra that was overwritten on the stack)
-"""
 import isa
 from alu import ALU
 from exceptions import (MemoryFault, AlignmentFault, ProtectionFault,
