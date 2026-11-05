@@ -58,6 +58,13 @@ Loading any 32-bit constant: `movh r1, HI` then `oru r1, r1, LO`.
 | 10010 | b | `b label` | always branch |
 | 10011 | call | `call label` | ra = PC + 4, branch |
 | 10100 | ret | `ret` | PC = ra |
+| 10101 | fadd | `fadd rd, rs1, rs2` | IEEE 754 float add (**extension**) |
+| 10110 | fsub | `fsub rd, rs1, rs2` | float subtract (**extension**) |
+| 10111 | fmul | `fmul rd, rs1, rs2` | float multiply (**extension**) |
+| 11000 | fdiv | `fdiv rd, rs1, rs2` | float divide (**extension**) |
+| 11001 | fcmp | `fcmp rs1, rs2` | float compare → E, GT (**extension**) |
+| 11010 | itof | `itof rd, rs2` | integer → float (**extension**) |
+| 11011 | ftoi | `ftoi rd, rs2` | float → integer, towards zero, saturating (**extension**) |
 | 11111 | hlt | `hlt` | **our extension**: stop the simulator |
 
 ## Assembler extras
@@ -68,6 +75,9 @@ Loading any 32-bit constant: `movh r1, HI` then `oru r1, r1, LO`.
 | label as immediate | `mov r2, array` |
 | data | `.word 1, 2, 0x10` / `.space 16` |
 | stack macros (preprocessor) | `push {r2, ra}` / `pop {r2, ra}` |
+| any 32-bit constant (macro → `movh` + `oru`) | `li r1, 0x12345678` |
+| any float constant (macro → `movh` + `oru`) | `lif r1, 2.5` |
+| float data | `.float 3.14, -0.5` |
 | comments | `@`, `;` or `//` |
 
 ## Where our RISC201 might differ from the professor's
@@ -78,3 +88,32 @@ Check these against any handout before the evaluation. Each one is a one-line ch
 - **`hlt`**: not in SimpleRisc. We added it at opcode 11111.
 - **Stage split**: 4-stage and 6-stage are our choice of merging / splitting Sarangi's 5 stages (see DESIGN.md).
 - **Shift by ≥ 32**: we give 0 (or all sign bits for `asr`).
+
+## Our extensions beyond SimpleRisc
+
+### Overflow flag V
+
+SimpleRisc has only E and GT. We add **V** (signed overflow), set by `add`, `sub`, `mul`, `div` and cleared when they don't overflow. `cmp` and `ld`/`st` address arithmetic never touch it.
+
+| Policy | How | Like |
+|---|---|---|
+| wrap (default) | keep the low 32 bits, set V | C, RISC-V, ARM's V flag |
+| trap (`--trap-overflow`) | raise `ArithmeticOverflow` at the exact PC | MIPS `add` |
+
+### Floating point
+
+IEEE 754 single precision on the ordinary registers (no separate float register file — the same idea as RISC-V's Zfinx). A register just holds a bit pattern; `fadd` reads it as a float, `add` reads it as an integer.
+
+The `h` modifier gives a 16-bit float constant for free: `fmulh r1, r1, 0x4000` multiplies by 2.0 (0x40000000).
+
+IEEE exceptions follow the standard's default: produce a special value and set a status flag, no trap.
+
+| Status flag | Raised by | Result |
+|---|---|---|
+| invalid | 0/0, ∞−∞, 0×∞, compare with NaN, ftoi out of range | NaN (ftoi saturates) |
+| divzero | x / 0 | ±∞ |
+| overflow | result too large | ±∞ (or the largest float, by rounding mode) |
+| underflow | tiny and inexact | denormal or 0 |
+| inexact | rounding discarded bits | rounded value |
+
+Rounding modes (book table 8.6): `--round nearest|zero|up|down`.

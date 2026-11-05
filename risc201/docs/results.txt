@@ -1,66 +1,150 @@
-clock periods used (ps): {'pipe6': 270, 'pipe4': 470, 'horizontal': 270, 'vertical': 300}
+clock periods used (ps): single=1000, pipe6=270, pipe4=470, horizontal=270, vertical=300
 
-1. PIPELINES: 4-stage (IF OF EX+MA RW) vs 6-stage (IF ID OF EX MA RW)
-program  model  instr  cycles    CPI  stalls  flushed  time(ns)
--------  -----  -----  ------  -----  ------  -------  --------
-    sum  pipe4     64      85  1.328       0       18      40.0
-    sum  pipe6     64     106  1.656      10       27      28.6
-   fact  pipe4     79     118  1.494       0       36      55.5
-   fact  pipe6     79     143   1.81       5       54      38.6
- hazard  pipe4      9      14  1.556       0        2       6.6
- hazard  pipe6      9      19  2.111       2        3       5.1
- muldiv  pipe4     17      20  1.176       0        0       9.4
- muldiv  pipe6     17      22  1.294       0        0       5.9
- bubble  pipe4    375     504  1.344       0      126     236.9
- bubble  pipe6    375     605  1.613      36      189     163.3
+1. PROCESSORS: single-cycle vs 4-stage (IF OF EX+MA RW) vs 6-stage (IF ID OF EX MA RW)
+program   model  instr  cycles    CPI  stalls  flushed  time(ns)
+-------  ------  -----  ------  -----  ------  -------  --------
+    sum  single     64      64    1.0       -        -      64.0
+    sum   pipe4     64      85  1.328       0       18      40.0
+    sum   pipe6     64     106  1.656      10       27      28.6
+   fact  single     79      79    1.0       -        -      79.0
+   fact   pipe4     79     118  1.494       0       36      55.5
+   fact   pipe6     79     143   1.81       5       54      38.6
+ hazard  single      9       9    1.0       -        -       9.0
+ hazard   pipe4      9      14  1.556       0        2       6.6
+ hazard   pipe6      9      19  2.111       2        3       5.1
+ muldiv  single     17      17    1.0       -        -      17.0
+ muldiv   pipe4     17      20  1.176       0        0       9.4
+ muldiv   pipe6     17      22  1.294       0        0       5.9
+ bubble  single    375     375    1.0       -        -     375.0
+ bubble   pipe4    375     504  1.344       0      126     236.9
+ bubble   pipe6    375     605  1.613      36      189     163.3
+    fib  single    124     124    1.0       -        -     124.0
+    fib   pipe4    124     165  1.331       0       38      77.5
+    fib   pipe6    124     186    1.5       0       57      50.2
+    gcd  single     23      23    1.0       -        -      23.0
+    gcd   pipe4     23      34  1.478       0        8      16.0
+    gcd   pipe6     23      40  1.739       0       12      10.8
+ matmul  single    493     493    1.0       -        -     493.0
+ matmul   pipe4    493     574  1.164       0       78     269.8
+ matmul   pipe6    493     642  1.302      27      117     173.3
+     fp  single     70      70    1.0       -        -      70.0
+     fp   pipe4     70      91    1.3       0       18      42.8
+     fp   pipe6     70     102  1.457       0       27      27.5
+    ovf  single      4       4    1.0       -        -       4.0
+    ovf   pipe4      4       7   1.75       0        0       3.3
+    ovf   pipe6      4       9   2.25       0        0       2.4
+
+   fastest in real time: sum=pipe6, fact=pipe6, hazard=pipe6, muldiv=pipe6, bubble=pipe6, fib=pipe6, gcd=pipe6, matmul=pipe6, fp=pipe6, ovf=pipe6
 
 2. MICROPROGRAMMED CONTROL: horizontal vs vertical
-program       model  instr  cycles    CPI   ROM bits  time(ns)
--------  ----------  -----  ------  -----  ---------  --------
-    sum  horizontal     64     318  4.969  26x26=676      85.9
-    sum    vertical     64     421  6.578  36x14=504     126.3
-   fact  horizontal     79     401  5.076  26x26=676     108.3
-   fact    vertical     79     535  6.772  36x14=504     160.5
- hazard  horizontal      9      45    5.0  26x26=676      12.2
- hazard    vertical      9      58  6.444  36x14=504      17.4
- muldiv  horizontal     17      83  4.882  26x26=676      22.4
- muldiv    vertical     17     107  6.294  36x14=504      32.1
- bubble  horizontal    375    1869  4.984  26x26=676     504.6
- bubble    vertical    375    2462  6.565  36x14=504     738.6
+program     control  instr  micro-cycles    CPI   ROM bits  time(ns)
+-------  ----------  -----  ------------  -----  ---------  --------
+    sum  horizontal     64           318  4.969  26x26=676      85.9
+    sum    vertical     64           421  6.578  36x14=504     126.3
+   fact  horizontal     79           401  5.076  26x26=676     108.3
+   fact    vertical     79           535  6.772  36x14=504     160.5
+ hazard  horizontal      9            45    5.0  26x26=676      12.2
+ hazard    vertical      9            58  6.444  36x14=504      17.4
+ muldiv  horizontal     17            83  4.882  26x26=676      22.4
+ muldiv    vertical     17           107  6.294  36x14=504      32.1
+ bubble  horizontal    375          1869  4.984  26x26=676     504.6
+ bubble    vertical    375          2462  6.565  36x14=504     738.6
+    fib  horizontal    124           578  4.661  26x26=676     156.1
+    fib    vertical    124           741  5.976  36x14=504     222.3
+    gcd  horizontal     23            99  4.304  26x26=676      26.7
+    gcd    vertical     23           121  5.261  36x14=504      36.3
+ matmul  horizontal    493          2454  4.978  26x26=676     662.6
+ matmul    vertical    493          3285  6.663  36x14=504     985.5
+     fp  horizontal     70           326  4.657  26x26=676      88.0
+     fp    vertical     70           428  6.114  36x14=504     128.4
+    ovf  horizontal      4            18    4.5  26x26=676       4.9
+    ovf    vertical      4            23   5.75  36x14=504       6.9
 
-3. ALU ALGORITHMS on 2000 random operand pairs
-                  op     algorithm          average cost
---------------------  ------------  --------------------
-                 add        ripple        64 gate delays
-                 add           cla        18 gate delays
- mul (random 32-bit)      shiftadd  16.0 add/sub per mul
- mul (random 32-bit)         booth  15.9 add/sub per mul
-mul (small positive)      shiftadd   4.0 add/sub per mul
-mul (small positive)         booth   4.6 add/sub per mul
-mul (small negative)      shiftadd  28.0 add/sub per mul
-mul (small negative)         booth   4.7 add/sub per mul
-                 div     restoring  61.4 add/sub per div
-                 div  nonrestoring  32.5 add/sub per div
+3. MICRO-CYCLES PER INSTRUCTION (fetch + decode + routine)
+          instruction  horizontal  vertical  extra
+---------------------  ----------  --------  -----
+add/sub/mul/and.. reg           5         7      2
+add/sub/mul/and.. imm           5         7      2
+            mov / not           5         6      1
+                  cmp           4         6      2
+                   ld           7         9      2
+                   st           6         9      3
+  beq / bgt not taken           4         4      0
+      beq / bgt taken           4         4      0
+                    b           3         3      0
+                 call           3         4      1
+                  ret           3         3      0
+                  nop           3         3      0
 
-   same programs, pipe6, ALU work counted:
-program              adder/mul/div  adds  adder delay  mul add/sub  div add/sub
--------  -------------------------  ----  -----------  -----------  -----------
-    sum  ripple/shiftadd/restoring    50         3200            0            0
-    sum     cla/booth/nonrestoring    50          900            0            0
-   fact  ripple/shiftadd/restoring    60         3840            8            0
-   fact     cla/booth/nonrestoring    64         1152           12            0
- hazard  ripple/shiftadd/restoring     6          384            0            0
- hazard     cla/booth/nonrestoring     6          108            0            0
- muldiv  ripple/shiftadd/restoring     2          128            2          125
- muldiv     cla/booth/nonrestoring     2           36            2           64
- bubble  ripple/shiftadd/restoring   266        17024            0            0
- bubble     cla/booth/nonrestoring   266         4788            0            0
+4. ALU ALGORITHMS on random operands
+ op        operands     algorithm    average cost
+---  --------------  ------------  --------------
+add   random 32-bit        ripple  64 gate levels
+add   random 32-bit       cselect  17 gate levels
+add   random 32-bit           cla  18 gate levels
+mul   random 32-bit     iterative    16.0 add/sub
+mul   random 32-bit         booth    16.0 add/sub
+mul  small positive     iterative     3.9 add/sub
+mul  small positive         booth     4.7 add/sub
+mul  small negative     iterative    28.1 add/sub
+mul  small negative         booth     4.6 add/sub
+div           small     restoring    61.4 add/sub
+div           small  nonrestoring    32.5 add/sub
 
-4. CORRECTNESS: every model and every ALU choice ends in the same state
-   sum      same
-   fact     same
-   hazard   same
-   muldiv   same
-   bubble   same
+5. ALU ALGORITHMS on the real programs (6-stage pipeline)
+program                adder/mul/div  adds  adder delay  muls  mul add/sub  divs  div add/sub
+-------  ---------------------------  ----  -----------  ----  -----------  ----  -----------
+    sum   ripple/iterative/restoring    50         3200     0            0     0            0
+    sum  cselect/iterative/restoring    50          850     0            0     0            0
+    sum       cla/booth/nonrestoring    50          900     0            0     0            0
+   fact   ripple/iterative/restoring    52         3328     5            8     0            0
+   fact  cselect/iterative/restoring    52          884     5            8     0            0
+   fact       cla/booth/nonrestoring    52          936     5           12     0            0
+ hazard   ripple/iterative/restoring     6          384     0            0     0            0
+ hazard  cselect/iterative/restoring     6          102     0            0     0            0
+ hazard       cla/booth/nonrestoring     6          108     0            0     0            0
+ muldiv   ripple/iterative/restoring     0            0     1            2     2          125
+ muldiv  cselect/iterative/restoring     0            0     1            2     2          125
+ muldiv       cla/booth/nonrestoring     0            0     1            2     2           64
+ bubble   ripple/iterative/restoring   266        17024     0            0     0            0
+ bubble  cselect/iterative/restoring   266         4522     0            0     0            0
+ bubble       cla/booth/nonrestoring   266         4788     0            0     0            0
+    fib   ripple/iterative/restoring    60         3840     0            0     0            0
+    fib  cselect/iterative/restoring    60         1020     0            0     0            0
+    fib       cla/booth/nonrestoring    60         1080     0            0     0            0
+    gcd   ripple/iterative/restoring     4          256     0            0     3          186
+    gcd  cselect/iterative/restoring     4           68     0            0     3          186
+    gcd       cla/booth/nonrestoring     4           72     0            0     3           97
+ matmul   ripple/iterative/restoring   242        15488   153          669     0            0
+ matmul  cselect/iterative/restoring   242         4114   153          669     0            0
+ matmul       cla/booth/nonrestoring   242         4356   153          315     0            0
+     fp   ripple/iterative/restoring    31         1984     0            0     0            0
+     fp  cselect/iterative/restoring    31          527     0            0     0            0
+     fp       cla/booth/nonrestoring    31          558     0            0     0            0
+    ovf   ripple/iterative/restoring     1           64     0            0     0            0
+    ovf  cselect/iterative/restoring     1           17     0            0     0            0
+    ovf       cla/booth/nonrestoring     1           18     0            0     0            0
+
+6. FLOATING POINT DIVISION (book 8.6) on 20000 random normal floats
+  algorithm  correctly rounded  worst error (ulp)  steps per divide  book complexity
+-----------  -----------------  -----------------  ----------------  ---------------
+  restoring            100.00%                  0                29       O(n log n)
+     newton             99.99%                  1                 5      O(log(n)^2)
+goldschmidt             99.98%                  1                 5      O(log(n)^2)
+
+   restoring: one quotient bit per step, exact remainder -> always correctly rounded
+   newton / goldschmidt: a few multiply steps, approximate -> may be 1 ulp off
+
+7. CORRECTNESS: 5 processor models x 3 ALU configurations, same final state?
+   sum      same (15 runs)
+   fact     same (15 runs)
+   hazard   same (15 runs)
+   muldiv   same (15 runs)
+   bubble   same (15 runs)
+   fib      same (15 runs)
+   gcd      same (15 runs)
+   matmul   same (15 runs)
+   fp       same (15 runs)
+   ovf      same (15 runs)
 
 all models agree
